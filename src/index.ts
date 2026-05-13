@@ -3,6 +3,8 @@
  * 
  * Supports natural language commands:
  * - "Add 'call Notary' to my today list"
+ * - "Create a new list called 'Projects'"
+ * - "Delete my old list"
  * - "Get all priority items"
  * - "Mark item 123 as done"
  * - "Remove item 456"
@@ -22,13 +24,15 @@ const CONFIG = {
 // ─── Types ───────────────────────────────────────────────────────────────────
 type Intent = 'add_item' | 'get_items' | 'get_priority' | 'mark_done' | 
               'remove_item' | 'update_item' | 'move_item' | 'add_note' | 
-              'export_list' | 'export_priority' | 'email_list' | 'email_priority' | 'unknown';
+              'export_list' | 'export_priority' | 'email_list' | 'email_priority' | 
+              'create_list' | 'delete_list' | 'unknown';
 
 interface ParsedIntent {
   intent: Intent;
   entities: {
     itemText?: string;
     listName?: string;
+    targetListName?: string;
     itemId?: string;
     priority?: boolean;
     note?: string;
@@ -56,6 +60,14 @@ function parseIntent(input: string): ParsedIntent {
   // Extract list name: "to my X list", "in my X list", "get my X list", "show X list"
   const listMatch = lower.match(/(?:to|in|on|get|show|view)?\s*(?:my\s+)?(\w+['']?\w*)\s+list/);
   const listName = listMatch ? listMatch[1] : undefined;
+  
+  // Extract new list name for "create a new list called X" / "create list X"
+  const createListMatch = lower.match(/(?:create|make|add)\s*(?:a\s+new\s+)?list\s*(?:called|named|\s)([^\n,]+)/i);
+  const newListName = createListMatch ? createListMatch[1].trim() : undefined;
+  
+  // Extract list name for delete: "delete my X list" or "delete list X"
+  const deleteListMatch = lower.match(/^delete\s+(?:my\s+)?(.+?)\s*list$/i);
+  const deleteListName = deleteListMatch ? deleteListMatch[1].trim() : undefined;
   
   // Extract item ID: "item 123" or "id 123" or "#123" or MongoDB ObjectId (24 hex chars)
   const idMatch = lower.match(/(?:item\s*|id\s*|#)([a-f0-9]{24}|\d+)/i);
@@ -98,6 +110,16 @@ function parseIntent(input: string): ParsedIntent {
   // Email list
   if (/^email\b/.test(lower) && /list/.test(lower)) {
     return { intent: 'email_list', entities: { listName, email, theme, includeArchived } };
+  }
+  
+  // Create list (before add_item — "create a new list called X")
+  if (/^create\s*(a\s+new)?\s*list/i.test(lower)) {
+    return { intent: 'create_list', entities: { listName: newListName } };
+  }
+  
+  // Delete list (before remove_item — "delete my X list" or "delete list X")
+  if (/^delete\s+(?:my\s+)?list\b/i.test(lower)) {
+    return { intent: 'delete_list', entities: { listName: deleteListName } };
   }
   
   // Add item
@@ -176,6 +198,19 @@ class ListerClient {
       return { success: ok, message: `Found ${lists.length} lists`, data: lists };
     } catch (err) {
       return { success: false, message: `Error fetching lists: ${err}` };
+    }
+  }
+
+  async deleteList(listId: string): Promise<ListerResponse> {
+    try {
+      const res = await fetch(`${this.baseUrl}/api/lists/${listId}`, {
+        method: 'DELETE',
+        headers: this.getAuthHeader(),
+      });
+      const data = await res.json() as any;
+      return { success: res.ok, message: res.ok ? 'List deleted' : `Failed: ${data?.detail ?? res.statusText}`, data };
+    } catch (err) {
+      return { success: false, message: `Error deleting list: ${err}` };
     }
   }
 
@@ -574,6 +609,31 @@ export async function handleCommand(input: string): Promise<string> {
         theme: parsed.entities.theme,
         includeArchived: parsed.entities.includeArchived,
       });
+      return formatResponse(result);
+    }
+    
+    case 'create_list': {
+      if (!parsed.entities.listName) {
+        return '❌ Please provide a name for the new list (e.g., "create a new list called Projects")';
+      }
+      const result = await client.createList(parsed.entities.listName);
+      return formatResponse(result);
+    }
+    
+    case 'delete_list': {
+      if (!parsed.entities.listName) {
+        return '❌ Please specify which list to delete (e.g., "delete my old list")';
+      }
+      const lists = await client.getLists();
+      if (!lists.success || !Array.isArray(lists.data)) {
+        return `❌ Could not fetch lists: ${lists.message}`;
+      }
+      const targetList = findListByName(lists.data, parsed.entities.listName);
+      if (!targetList) {
+        const names = lists.data.map((l: any) => l.name).join(', ');
+        return `❌ List '${parsed.entities.listName}' not found. Available: ${names}`;
+      }
+      const result = await client.deleteList(targetList._id);
       return formatResponse(result);
     }
     
