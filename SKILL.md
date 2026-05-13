@@ -7,6 +7,8 @@
 
 Use this skill whenever the user wants to manage tasks, to-do items, or lists using natural language. Trigger phrases include (but are not limited to):
 
+- **"create a new list"** — create a new list
+- **"delete my list"** — delete a list
 - **"add to list"** — create a new task item
 - **"get my lists"** — view all lists or items in a list
 - **"priority items"** — see urgent/important items
@@ -186,6 +188,30 @@ Email all priority items to yourself or someone else.
 | `email priority items theme dark` | `email priority items theme dark` |
 
 **Keywords:** `email`, `priority`, `urgent`, `important`
+
+### 13. Create List
+Create a new list.
+
+| Pattern | Example |
+|---------|---------|
+| `create a new list called [name]` | `create a new list called Projects` |
+| `make a new list named [name]` | `make a new list named Work` |
+
+**Keywords:** `create`, `make`, `add`
+
+### 14. Delete List
+Delete an existing list (all items are permanently removed).
+
+| Pattern | Example |
+|---------|---------|
+| `delete my [list] list` | `delete my old projects list` |
+| `delete list [name]` | `delete list Archive` |
+
+**Keywords:** `delete`
+
+**Note:** List name matching is case-insensitive.
+
+---
 
 ## API Reference
 
