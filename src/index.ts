@@ -66,8 +66,13 @@ function parseIntent(input: string): ParsedIntent {
   const newListName = createListMatch ? createListMatch[1].trim() : undefined;
   
   // Extract list name for delete: "delete my X list" or "delete list X"
-  const deleteListMatch = lower.match(/^delete\s+(?:my\s+)?(.+?)\s*list$/i);
+  // Handles: "delete my work list" → work
+  const deleteListMatch = lower.match(/^delete\s+(?:my\s+)?(.+?)\s+list$/i);
   const deleteListName = deleteListMatch ? deleteListMatch[1].trim() : undefined;
+  // Also handle "delete list X": extract X after "delete list "
+  const deleteListAltMatch = lower.match(/^delete\s+list\s+(.+)$/i);
+  const deleteListAltName = deleteListAltMatch ? deleteListAltMatch[1].trim() : undefined;
+  const finalDeleteListName = deleteListName || deleteListAltName;
   
   // Extract item ID: "item 123" or "id 123" or "#123" or MongoDB ObjectId (24 hex chars)
   const idMatch = lower.match(/(?:item\s*|id\s*|#)([a-f0-9]{24}|\d+)/i);
@@ -117,9 +122,11 @@ function parseIntent(input: string): ParsedIntent {
     return { intent: 'create_list', entities: { listName: newListName } };
   }
   
-  // Delete list (before remove_item — "delete my X list" or "delete list X")
-  if (/^delete\s+(?:my\s+)?list\b/i.test(lower)) {
-    return { intent: 'delete_list', entities: { listName: deleteListName } };
+  // Delete list: "delete my X list" (captures X) or "delete list X" (captures X)
+  // For "delete list X": don't use deleteListMatch (it expects 'list' at end)
+  const isDeleteListPattern = /^delete\s+(?:my\s+)?.*\s+list$/i.test(lower) || /^delete\s+list\s+/i.test(lower);
+  if (isDeleteListPattern && finalDeleteListName) {
+    return { intent: 'delete_list', entities: { listName: finalDeleteListName } };
   }
   
   // Add item
