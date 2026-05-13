@@ -19,6 +19,7 @@ import fetch from 'node-fetch';
 const CONFIG = {
   baseUrl: process.env.LISTER_BASE_URL || 'https://lister-api-staging.up.railway.app',
   apiKey: process.env.LISTER_API_KEY || '',
+  defaultListName: 'Quick Takes',
 };
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -499,10 +500,12 @@ export async function handleCommand(input: string): Promise<string> {
       if (!parsed.entities.itemText) {
         return '❌ Please provide what to add (use quotes: "task name")';
       }
-      if (!parsed.entities.listName) {
-        return '❌ Please specify which list (e.g., "to my today list")';
+      let listName = parsed.entities.listName;
+      if (!listName) {
+        // Default to Quick Takes if no list specified
+        listName = CONFIG.defaultListName;
       }
-      const result = await resolveList(parsed.entities.listName);
+      const result = await resolveList(listName);
       if ('error' in result) return result.error;
       const addResult = await client.addItem(
         result.list._id,
