@@ -320,7 +320,6 @@ class ListerClient {
         content,
         type: 'text',
         status: 'new',
-        listId,
         isPriority,
       };
       const res = await fetch(`${this.baseUrl}/api/lists/${listId}/items`, {
@@ -338,7 +337,7 @@ class ListerClient {
   async updateItem(itemId: string, updates: Record<string, any>): Promise<ListerResponse> {
     try {
       const res = await fetch(`${this.baseUrl}/api/items/${itemId}`, {
-        method: 'PUT',
+        method: 'PATCH',
         headers: this.getAuthHeader(),
         body: JSON.stringify(updates),
       });
@@ -503,9 +502,11 @@ class ListerClient {
       const res = await fetch(`${this.baseUrl}/api/search?${params}`, {
         headers: this.getAuthHeader(),
       });
-      const { ok, data } = await this.parseResponse(res);
+      const json = await res.json() as any;
+      const data = json.data ?? json.results ?? json;
       const items = Array.isArray(data) ? data : (data?.items ?? []);
-      return { success: ok, message: `Found ${items.length} results`, data: items };
+      const totalResults = json.totalResults ?? items.length;
+      return { success: res.ok, message: `Found ${totalResults} results`, data: items };
     } catch (err) {
       return { success: false, message: `Error searching: ${err}` };
     }
@@ -704,7 +705,7 @@ export async function handleCommand(input: string): Promise<string> {
       const result = await resolveList(listName);
       if ('error' in result) return result.error;
       const addResult = await client.addItem(
-        result.list._id,
+        result.list.id,
         parsed.entities.itemText,
         parsed.entities.priority ?? false,
       );
@@ -718,7 +719,7 @@ export async function handleCommand(input: string): Promise<string> {
       }
       const result = await resolveList(parsed.entities.listName);
       if ('error' in result) return result.error;
-      const itemsResult = await client.getItems(result.list._id);
+      const itemsResult = await client.getItems(result.list.id);
       return formatResponse(itemsResult);
     }
     
@@ -760,7 +761,7 @@ export async function handleCommand(input: string): Promise<string> {
       }
       const result = await resolveList(parsed.entities.listName);
       if ('error' in result) return result.error;
-      const moveResult = await client.moveItem(parsed.entities.itemId, result.list._id);
+      const moveResult = await client.moveItem(parsed.entities.itemId, result.list.id);
       return formatResponse(moveResult);
     }
     
@@ -778,7 +779,7 @@ export async function handleCommand(input: string): Promise<string> {
       }
       const result = await resolveList(parsed.entities.listName);
       if ('error' in result) return result.error;
-      const exportResult = await client.exportList(result.list._id, {
+      const exportResult = await client.exportList(result.list.id, {
         format: parsed.entities.format,
         theme: parsed.entities.theme,
         includeArchived: parsed.entities.includeArchived,
@@ -801,7 +802,7 @@ export async function handleCommand(input: string): Promise<string> {
       }
       const result = await resolveList(parsed.entities.listName);
       if ('error' in result) return result.error;
-      const emailResult = await client.emailList(result.list._id, {
+      const emailResult = await client.emailList(result.list.id, {
         toEmail: parsed.entities.email,
         theme: parsed.entities.theme,
         includeArchived: parsed.entities.includeArchived,
@@ -839,7 +840,7 @@ export async function handleCommand(input: string): Promise<string> {
         const names = allLists.data.map((l: any) => l.name).join(', ');
         return `❌ List '${parsed.entities.listName}' not found. Available: ${names}`;
       }
-      const dResult = await client.deleteList(targetList._id);
+      const dResult = await client.deleteList(targetList.id);
       return formatResponse(dResult);
     }
     
@@ -863,7 +864,7 @@ export async function handleCommand(input: string): Promise<string> {
         msg += sumResult.data.map((s: any) => {
           const nm = s.name || 'Untitled';
           const tot = s.totalItems ?? s.itemCount ?? '?';
-          const done = s.completedItems ?? s.doneCount ?? '?';
+          const done = s.completedCount ?? s.completedItems ?? s.doneCount ?? 0;
           return `• **${nm}**: ${tot} items (${done} done)`;
         }).join('\n');
         return msg;
@@ -877,7 +878,7 @@ export async function handleCommand(input: string): Promise<string> {
       }
       const arList = await resolveList(parsed.entities.listName);
       if ('error' in arList) return arList.error;
-      const arResult = await client.archiveList(arList.list._id, true);
+      const arResult = await client.archiveList(arList.list.id, true);
       return formatResponse(arResult);
     }
     
@@ -887,7 +888,7 @@ export async function handleCommand(input: string): Promise<string> {
       }
       const uList = await resolveList(parsed.entities.listName);
       if ('error' in uList) return uList.error;
-      const uResult = await client.archiveList(uList.list._id, false);
+      const uResult = await client.archiveList(uList.list.id, false);
       return formatResponse(uResult);
     }
     
@@ -897,7 +898,7 @@ export async function handleCommand(input: string): Promise<string> {
       }
       const shList = await resolveList(parsed.entities.listName);
       if ('error' in shList) return shList.error;
-      const shResult = await client.shareList(shList.list._id, parsed.entities.userId, parsed.entities.permission ?? 'edit');
+      const shResult = await client.shareList(shList.list.id, parsed.entities.userId, parsed.entities.permission ?? 'edit');
       return formatResponse(shResult);
     }
     
@@ -907,7 +908,7 @@ export async function handleCommand(input: string): Promise<string> {
       }
       const luList = await resolveList(parsed.entities.listName);
       if ('error' in luList) return luList.error;
-      const luResult = await client.getListUsers(luList.list._id);
+      const luResult = await client.getListUsers(luList.list.id);
       return formatResponse(luResult);
     }
     
@@ -917,7 +918,7 @@ export async function handleCommand(input: string): Promise<string> {
       }
       const rmList = await resolveList(parsed.entities.listName);
       if ('error' in rmList) return rmList.error;
-      const rmResult = await client.removeListUser(rmList.list._id, parsed.entities.userId);
+      const rmResult = await client.removeListUser(rmList.list.id, parsed.entities.userId);
       return formatResponse(rmResult);
     }
     

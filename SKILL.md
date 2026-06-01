@@ -321,7 +321,7 @@ The skill communicates with the Lister REST API. The following endpoints are use
 | `GET` | `/api/lists/summary` | Get lists summary with counts |
 | `GET` | `/api/lists/{id}/items` | Get items in a list |
 | `POST` | `/api/lists/{id}/items` | Add an item to a list |
-| `PUT` | `/api/items/{id}` | Update an item (text, status, priority, archived) |
+| `PATCH` | `/api/items/{id}` | Update an item (text, status, priority, archived) |
 | `DELETE` | `/api/items/{id}` | Delete an item |
 | `POST` | `/api/items/{id}/move` | Move item to another list |
 | `POST` | `/api/items/{id}/notes` | Add a note to an item |
@@ -337,7 +337,7 @@ The skill communicates with the Lister REST API. The following endpoints are use
 | `POST` | `/api/items/priority/export` | Export priority items (JSON/HTML) |
 | `POST` | `/api/items/priority/export/email` | Email priority items |
 
-**Authentication:** Bearer token via `X-API-Key` header (NOT Authorization header).
+**Authentication:** API key via `X-API-Key` header (recommended) or Bearer token via `Authorization` header for all endpoints.
 
 ## Response Format
 
@@ -380,9 +380,14 @@ lister-skill/
 
 1. **Always quote item text** — the parser extracts text between quotes (`" "` or `' '`). If the user doesn't use quotes, ask them to.
 2. **List names are case-insensitive** — `today`, `Today`, and `TODAY` all match the same list.
-3. **Item IDs are MongoDB ObjectIds** — 24-character hex strings, extracted from patterns like `item 6a1d5a16...`, `id 6a1d5a16...`, or `#6a1d5a16...`. Numeric IDs also work for compatibility.
+3. **IDs are now consistent** — The API returns `id` (not `_id`) across all resources: lists, items, notes, and users. IDs are 24-character hex strings, extracted from patterns like `item 6a1d5a16...`, `id 6a1d5a16...`, or `#6a1d5a16...`.
 4. **The skill auto-resolves list names to IDs** — users don't need to know internal list IDs; they use friendly names.
 5. **If the list doesn't exist**, the skill will report an error — it does **not** auto-create lists. The user must create the list first or use an existing one.
 6. **Archived lists** are automatically included in list name resolution — if a list name isn't found in active lists, the skill searches archived lists too.
-7. **Search** uses the `/api/search` endpoint and returns matching items across all lists.
+7. **Search** uses the `/api/search` endpoint and returns `{success, data, totalResults}` — items are in the `data` array.
 8. **Sharing** requires a user ID (email) and permission level (`read`, `edit`, or `admin`).
+9. **Item statuses** can be `new`, `in-progress`, or `complete` (the `in-progress` status is new).
+10. **Item creation** no longer requires `listId` in the request body — it's derived from the URL path.
+11. **API key creation** now returns `201 Created` (was `200 OK`).
+12. **Note creation** now returns `201 Created` (was `200 OK`).
+13. **User self-deletion** is now supported (`DELETE /api/auth/me` returns `200`).
