@@ -211,6 +211,101 @@ Delete an existing list (all items are permanently removed).
 
 **Note:** List name matching is case-insensitive.
 
+### 15. Search
+Search across all lists and items.
+
+| Pattern | Example |
+|---------|---------|
+| `search for [query]` | `search for meeting` |
+| `find [query]` | `find contract` |
+| `search for [query] with notes` | `search for call with notes` |
+
+**Keywords:** `search`, `find` (combined with search terms, not list name)
+
+**Note:** Use `with notes` or `include notes` to include note content in search results.
+
+### 16. Lists Summary
+Get a summary of all lists with item counts.
+
+| Pattern | Example |
+|---------|---------|
+| `list summary` | `list summary` |
+| `lists summary` | `lists summary` |
+| `get list summary` | `get list summary` |
+
+**Keywords:** `summary`
+
+### 17. Archive List
+Archive a list (hides it from normal views).
+
+| Pattern | Example |
+|---------|---------|
+| `archive my [list] list` | `archive my old project list` |
+
+**Keywords:** `archive`
+
+### 18. Unarchive List
+Restore an archived list.
+
+| Pattern | Example |
+|---------|---------|
+| `unarchive my [list] list` | `unarchive my project list` |
+
+**Keywords:** `unarchive`
+
+**Note:** archived lists are automatically searched when resolving list names.
+
+### 19. Share List
+Share a list with another user.
+
+| Pattern | Example |
+|---------|---------|
+| `share my [list] list with [email]` | `share my work list with user@example.com` |
+| `share my [list] list with [email] as [perm]` | `share my work list with user@example.com as edit` |
+
+**Keywords:** `share`, `with`, `as`
+
+**Permissions:** `read`, `edit` (default), `admin`
+
+### 20. List Users
+Show users who have access to a list.
+
+| Pattern | Example |
+|---------|---------|
+| `list users for [list] list` | `list users for my work list` |
+| `show users of [list] list` | `show users of work list` |
+
+**Keywords:** `users`, `for`, `of`
+
+### 21. Remove User From List
+Remove a user's access from a shared list.
+
+| Pattern | Example |
+|---------|---------|
+| `remove user [email] from my [list] list` | `remove user@example.com from my work list` |
+
+**Keywords:** `remove user`, `from`
+
+### 22. Update Note
+Edit the text of an existing note on an item.
+
+| Pattern | Example |
+|---------|---------|
+| `update note for item [id] note [id]: "text"` | `update note for item abc123 note def456: "updated text"` |
+| `edit note for item [id] note [id]: "text"` | `edit note for item abc123 note def456: "new text"` |
+
+**Keywords:** `update note`, `edit note`, `change note`
+
+### 23. Delete Note
+Delete a note from an item.
+
+| Pattern | Example |
+|---------|---------|
+| `delete note for item [id] note [id]` | `delete note for item abc123 note def456` |
+| `remove note for item [id] note [id]` | `remove note for item abc123 note def456` |
+
+**Keywords:** `delete note`, `remove note`
+
 ---
 
 ## API Reference
@@ -219,14 +314,24 @@ The skill communicates with the Lister REST API. The following endpoints are use
 
 | Method | Endpoint | Purpose |
 |--------|----------|---------|
-| `GET` | `/api/lists` | Fetch all lists |
+| `GET` | `/api/lists` | Fetch all lists (supports `?includeArchived=true`) |
 | `POST` | `/api/lists` | Create a new list |
+| `DELETE` | `/api/lists/{id}` | Delete a list |
+| `PUT` | `/api/lists/{id}/archive` | Archive/unarchive a list |
+| `GET` | `/api/lists/summary` | Get lists summary with counts |
 | `GET` | `/api/lists/{id}/items` | Get items in a list |
 | `POST` | `/api/lists/{id}/items` | Add an item to a list |
-| `PUT` | `/api/items/{id}` | Update an item (text, done, priority, list_id) |
+| `PUT` | `/api/items/{id}` | Update an item (text, status, priority, archived) |
 | `DELETE` | `/api/items/{id}` | Delete an item |
+| `POST` | `/api/items/{id}/move` | Move item to another list |
 | `POST` | `/api/items/{id}/notes` | Add a note to an item |
+| `PUT` | `/api/items/{id}/notes/{nid}` | Update a note |
+| `DELETE` | `/api/items/{id}/notes/{nid}` | Delete a note |
 | `GET` | `/api/items/priority` | Get all priority items |
+| `GET` | `/api/search` | Search across all lists & items |
+| `POST` | `/api/lists/{id}/share` | Share a list with a user |
+| `GET` | `/api/lists/{id}/users` | Get list users/permissions |
+| `DELETE` | `/api/lists/{id}/users/{uid}` | Remove user from list |
 | `POST` | `/api/lists/{id}/export` | Export a list (JSON/HTML) |
 | `POST` | `/api/lists/{id}/export/email` | Email a list |
 | `POST` | `/api/items/priority/export` | Export priority items (JSON/HTML) |
@@ -275,6 +380,9 @@ lister-skill/
 
 1. **Always quote item text** — the parser extracts text between quotes (`" "` or `' '`). If the user doesn't use quotes, ask them to.
 2. **List names are case-insensitive** — `today`, `Today`, and `TODAY` all match the same list.
-3. **Item IDs are numeric** — extracted from patterns like `item 123`, `id 123`, or `#123`.
+3. **Item IDs are MongoDB ObjectIds** — 24-character hex strings, extracted from patterns like `item 6a1d5a16...`, `id 6a1d5a16...`, or `#6a1d5a16...`. Numeric IDs also work for compatibility.
 4. **The skill auto-resolves list names to IDs** — users don't need to know internal list IDs; they use friendly names.
 5. **If the list doesn't exist**, the skill will report an error — it does **not** auto-create lists. The user must create the list first or use an existing one.
+6. **Archived lists** are automatically included in list name resolution — if a list name isn't found in active lists, the skill searches archived lists too.
+7. **Search** uses the `/api/search` endpoint and returns matching items across all lists.
+8. **Sharing** requires a user ID (email) and permission level (`read`, `edit`, or `admin`).

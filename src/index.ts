@@ -25,8 +25,10 @@ const CONFIG = {
 // ─── Types ───────────────────────────────────────────────────────────────────
 type Intent = 'add_item' | 'get_items' | 'get_priority' | 'mark_done' | 
               'remove_item' | 'update_item' | 'move_item' | 'add_note' | 
+              'update_note' | 'delete_note' | 'archive_list' | 'unarchive_list' |
               'export_list' | 'export_priority' | 'email_list' | 'email_priority' | 
-              'create_list' | 'delete_list' | 'unknown';
+              'create_list' | 'delete_list' | 'search' | 'list_summary' |
+              'share_list' | 'list_users' | 'remove_list_user' | 'unknown';
 
 interface ParsedIntent {
   intent: Intent;
@@ -35,12 +37,20 @@ interface ParsedIntent {
     listName?: string;
     targetListName?: string;
     itemId?: string;
+    noteId?: string;
     priority?: boolean;
     note?: string;
+    noteStatus?: 'new' | 'complete';
+    archived?: boolean;
     format?: 'json' | 'html';
     theme?: 'light' | 'dark';
     email?: string;
     includeArchived?: boolean;
+    userId?: string;
+    permission?: 'read' | 'edit' | 'admin';
+    searchQuery?: string;
+    searchLimit?: number;
+    includeNotes?: boolean;
   };
 }
 
@@ -78,6 +88,11 @@ function parseIntent(input: string): ParsedIntent {
   // Extract item ID: "item 123" or "id 123" or "#123" or MongoDB ObjectId (24 hex chars)
   const idMatch = lower.match(/(?:item\s*|id\s*|#)([a-f0-9]{24}|\d+)/i);
   const itemId = idMatch ? idMatch[1] : undefined;
+  
+  // Extract note ID: "note 123" or "note_id 123" or similar (MongoDB ObjectId or numeric)
+  const noteIdMatch = lower.match(/note\s*(?:id\s*)?([a-f0-9]{24}|\d+)/i);
+  // Only extract noteId if it's explicitly requested (not just an item ID)
+  const noteId = /(?:update|edit|change|delete|remove)\s+note/i.test(lower) || /note\s+(?:id\s*)?[a-f0-9]{24}/i.test(lower) ? (noteIdMatch ? noteIdMatch[1] : undefined) : undefined;
   
   // Extract email: "to email@address.com"
   const emailMatch = input.match(/to\s+([\w.+-]+@[\w.-]+\.[a-z]{2,})/i);
@@ -130,12 +145,59 @@ function parseIntent(input: string): ParsedIntent {
     return { intent: 'delete_list', entities: { listName: finalDeleteListName } };
   }
   
+  // Search (check before get_items — "search for X" vs "search my X list")
+  if (/^(search|find)\b/.test(lower) && !/\blist\b/.test(lower)) {
+    const searchQuery = quotedMatch ? quotedMatch[1] : input.replace(/^\s*(?:search|find)\s+(?:for\s+)?/i, '').trim();
+    return { intent: 'search', entities: { searchQuery, includeNotes: /with\s+notes/i.test(lower), includeArchived: /include\s+archived|with\s+archived/i.test(lower) } };
+  }
+  
+  // List summary (must come before get_items)
+  if (/^(lists?\s+)?summary/i.test(lower) || /get\s+lists?\s+summary/i.test(lower)) {
+    return { intent: 'list_summary', entities: { includeArchived: /include\s+archived|with\s+archived/i.test(lower) } };
+  }
+  
+  // Archive list (must come before get_items/delete_item)
+  if (/^archive\b/.test(lower) && /\blist\b/.test(lower)) {
+    return { intent: 'archive_list', entities: { listName } };
+  }
+  
+  // Unarchive list
+  if (/^unarchive\b/.test(lower) && /\blist\b/.test(lower)) {
+    return { intent: 'unarchive_list', entities: { listName } };
+  }
+  
+  // Share list with user
+  const shareMatch = lower.match(/share\s+(?:my\s+)?(\w+['']?\w*)\s+list\s+with\s+(\S+)/i);
+  if (shareMatch) {
+    return { intent: 'share_list', entities: { listName: shareMatch[1], userId: shareMatch[2], permission: /as\s+(read|edit|admin)/i.test(lower) ? lower.match(/as\s+(read|edit|admin)/i)![1] as any : 'edit' } };
+  }
+  // "list users of my X list" / "show users for my X list"
+  const listUsersMatch = lower.match(/(?:list|show|get)\s+users\s+(?:for|of)\s+(?:my\s+)?(\w+['']?\w*)\s+list/i);
+  if (listUsersMatch) {
+    return { intent: 'list_users', entities: { listName: listUsersMatch[1] } };
+  }
+  // "remove user X from my Y list"
+  const removeUserMatch = lower.match(/remove\s+user\s+(\S+)\s+from\s+(?:my\s+)?(\w+['']?\w*)\s+list/i);
+  if (removeUserMatch) {
+    return { intent: 'remove_list_user', entities: { userId: removeUserMatch[1], listName: removeUserMatch[2] } };
+  }
+  
+  // Update note
+  if (/^(update|edit|change|modify)\s+note/i.test(lower)) {
+    return { intent: 'update_note', entities: { itemId, noteId, note: quotedMatch ? quotedMatch[1] : undefined } };
+  }
+  
+  // Delete note
+  if (/^(delete|remove)\s+note/i.test(lower)) {
+    return { intent: 'delete_note', entities: { itemId, noteId } };
+  }
+  
   // Add item
   if (/^(add|create|new|put)\b/.test(lower)) {
     return { intent: 'add_item', entities: { itemText, listName, priority } };
   }
   
-  // Get items / list
+  // Get items / list (generic fallback for show/view/find/list/get + list name)
   if (/^(get|show|list|view|find|search)\b/.test(lower)) {
     if (priority) {
       return { intent: 'get_priority', entities: { listName } };
@@ -165,8 +227,8 @@ function parseIntent(input: string): ParsedIntent {
   
   // Add note
   if (/^(note|comment|memo)\b/.test(lower)) {
-    const note = quotedMatch ? quotedMatch[1] : undefined;
-    return { intent: 'add_note', entities: { itemId, note } };
+    const nte = quotedMatch ? quotedMatch[1] : undefined;
+    return { intent: 'add_note', entities: { itemId, note: nte } };
   }
   
   return { intent: 'unknown', entities: {} };
@@ -196,9 +258,12 @@ class ListerClient {
     return { ok: res.ok, data: items };
   }
 
-  async getLists(): Promise<ListerResponse> {
+  async getLists(options?: { includeArchived?: boolean }): Promise<ListerResponse> {
     try {
-      const res = await fetch(`${this.baseUrl}/api/lists`, {
+      const params = new URLSearchParams();
+      if (options?.includeArchived) params.set('includeArchived', 'true');
+      const url = `${this.baseUrl}/api/lists${params.toString() ? '?' + params : ''}`;
+      const res = await fetch(url, {
         headers: this.getAuthHeader(),
       });
       const { ok, data } = await this.parseResponse(res);
@@ -428,6 +493,130 @@ class ListerClient {
       return { success: false, message: `Error emailing priority items: ${err}` };
     }
   }
+
+  async search(query: string, options: { limit?: number; includeArchived?: boolean; includeNotes?: boolean }): Promise<ListerResponse> {
+    try {
+      const params = new URLSearchParams({ q: query });
+      if (options.limit) params.set('limit', String(options.limit));
+      if (options.includeArchived) params.set('include_archived', 'true');
+      if (options.includeNotes) params.set('include_notes', 'true');
+      const res = await fetch(`${this.baseUrl}/api/search?${params}`, {
+        headers: this.getAuthHeader(),
+      });
+      const { ok, data } = await this.parseResponse(res);
+      const items = Array.isArray(data) ? data : (data?.items ?? []);
+      return { success: ok, message: `Found ${items.length} results`, data: items };
+    } catch (err) {
+      return { success: false, message: `Error searching: ${err}` };
+    }
+  }
+
+  async getListsSummary(options: { includeArchived?: boolean }): Promise<ListerResponse> {
+    try {
+      const params = new URLSearchParams();
+      if (options.includeArchived) params.set('includeArchived', 'true');
+      const url = `${this.baseUrl}/api/lists/summary${params.toString() ? '?' + params : ''}`;
+      const res = await fetch(url, { headers: this.getAuthHeader() });
+      const { ok, data } = await this.parseResponse(res);
+      return { success: ok, message: 'Lists summary', data };
+    } catch (err) {
+      return { success: false, message: `Error fetching lists summary: ${err}` };
+    }
+  }
+
+  async archiveList(listId: string, archived: boolean): Promise<ListerResponse> {
+    try {
+      const res = await fetch(`${this.baseUrl}/api/lists/${listId}/archive`, {
+        method: 'PUT',
+        headers: this.getAuthHeader(),
+        body: JSON.stringify({ archived }),
+      });
+      const data = await res.json() as any;
+      return { success: res.ok, message: res.ok ? (archived ? 'List archived' : 'List unarchived') : `Failed: ${JSON.stringify(data?.detail ?? res.statusText)}`, data };
+    } catch (err) {
+      return { success: false, message: `Error archiving list: ${err}` };
+    }
+  }
+
+  async shareList(listId: string, userId: string, permission: 'read' | 'edit' | 'admin'): Promise<ListerResponse> {
+    try {
+      const res = await fetch(`${this.baseUrl}/api/lists/${listId}/share`, {
+        method: 'POST',
+        headers: this.getAuthHeader(),
+        body: JSON.stringify({ userId, permission }),
+      });
+      const data = await res.json() as any;
+      return { success: res.ok, message: res.ok ? `List shared with ${userId} (${permission})` : `Failed: ${JSON.stringify(data?.detail ?? res.statusText)}`, data };
+    } catch (err) {
+      return { success: false, message: `Error sharing list: ${err}` };
+    }
+  }
+
+  async getListUsers(listId: string): Promise<ListerResponse> {
+    try {
+      const res = await fetch(`${this.baseUrl}/api/lists/${listId}/users`, {
+        headers: this.getAuthHeader(),
+      });
+      const { ok, data } = await this.parseResponse(res);
+      const users = Array.isArray(data) ? data : [];
+      return { success: ok, message: `Found ${users.length} users`, data: users };
+    } catch (err) {
+      return { success: false, message: `Error fetching list users: ${err}` };
+    }
+  }
+
+  async removeListUser(listId: string, userId: string): Promise<ListerResponse> {
+    try {
+      const res = await fetch(`${this.baseUrl}/api/lists/${listId}/users/${userId}`, {
+        method: 'DELETE',
+        headers: this.getAuthHeader(),
+      });
+      const data = await res.json() as any;
+      return { success: res.ok, message: res.ok ? `User ${userId} removed from list` : `Failed: ${JSON.stringify(data?.detail ?? res.statusText)}`, data };
+    } catch (err) {
+      return { success: false, message: `Error removing user from list: ${err}` };
+    }
+  }
+
+  async updateNote(itemId: string, noteId: string, content: string): Promise<ListerResponse> {
+    try {
+      const res = await fetch(`${this.baseUrl}/api/items/${itemId}/notes/${noteId}`, {
+        method: 'PUT',
+        headers: this.getAuthHeader(),
+        body: JSON.stringify({ content }),
+      });
+      const data = await res.json() as any;
+      return { success: res.ok, message: res.ok ? 'Note updated' : `Failed: ${JSON.stringify(data?.detail ?? res.statusText)}`, data };
+    } catch (err) {
+      return { success: false, message: `Error updating note: ${err}` };
+    }
+  }
+
+  async deleteNote(itemId: string, noteId: string): Promise<ListerResponse> {
+    try {
+      const res = await fetch(`${this.baseUrl}/api/items/${itemId}/notes/${noteId}`, {
+        method: 'DELETE',
+        headers: this.getAuthHeader(),
+      });
+      return { success: res.ok, message: res.ok ? 'Note deleted' : 'Failed to delete note' };
+    } catch (err) {
+      return { success: false, message: `Error deleting note: ${err}` };
+    }
+  }
+
+  async updateNoteStatus(itemId: string, noteId: string, status: 'new' | 'complete'): Promise<ListerResponse> {
+    try {
+      const res = await fetch(`${this.baseUrl}/api/items/${itemId}/notes/${noteId}/status`, {
+        method: 'PATCH',
+        headers: this.getAuthHeader(),
+        body: JSON.stringify({ status }),
+      });
+      const data = await res.json() as any;
+      return { success: res.ok, message: res.ok ? `Note marked as ${status}` : `Failed: ${JSON.stringify(data?.detail ?? res.statusText)}`, data };
+    } catch (err) {
+      return { success: false, message: `Error updating note status: ${err}` };
+    }
+  }
 }
 
 // ─── List Name Matching ─────────────────────────────────────────────────────
@@ -476,14 +665,21 @@ function formatResponse(response: ListerResponse): string {
 }
 
 // ─── Helper: Resolve list with error ─────────────────────────────────────────
-async function resolveList(listName: string): Promise<{ list: any } | { error: string }> {
-  const lists = await client.getLists();
+async function resolveList(listName: string, includeArchived: boolean = false): Promise<{ list: any } | { error: string }> {
+  let lists = await client.getLists();
   if (!lists.success || !Array.isArray(lists.data)) {
     return { error: `❌ Could not fetch lists: ${lists.message}` };
   }
-  const list = findListByName(lists.data, listName);
+  let list = findListByName(lists.data, listName);
+  // If not found and not already including archived, try again with archived
+  if (!list && !includeArchived) {
+    lists = await client.getLists({ includeArchived: true } as any);
+    if (lists.success && Array.isArray(lists.data)) {
+      list = findListByName(lists.data, listName);
+    }
+  }
   if (!list) {
-    const names = lists.data.map((l: any) => l.name).join(', ');
+    const names = (lists.data as any[]).map((l: any) => l.name).join(', ');
     return { error: `❌ List '${listName}' not found. Available: ${names}` };
   }
   return { list };
@@ -626,25 +822,119 @@ export async function handleCommand(input: string): Promise<string> {
       if (!parsed.entities.listName) {
         return '❌ Please provide a name for the new list (e.g., "create a new list called Projects")';
       }
-      const result = await client.createList(parsed.entities.listName);
-      return formatResponse(result);
+      const cResult = await client.createList(parsed.entities.listName);
+      return formatResponse(cResult);
     }
     
     case 'delete_list': {
       if (!parsed.entities.listName) {
         return '❌ Please specify which list to delete (e.g., "delete my old list")';
       }
-      const lists = await client.getLists();
-      if (!lists.success || !Array.isArray(lists.data)) {
-        return `❌ Could not fetch lists: ${lists.message}`;
+      const allLists = await client.getLists();
+      if (!allLists.success || !Array.isArray(allLists.data)) {
+        return `❌ Could not fetch lists: ${allLists.message}`;
       }
-      const targetList = findListByName(lists.data, parsed.entities.listName);
+      const targetList = findListByName(allLists.data, parsed.entities.listName);
       if (!targetList) {
-        const names = lists.data.map((l: any) => l.name).join(', ');
+        const names = allLists.data.map((l: any) => l.name).join(', ');
         return `❌ List '${parsed.entities.listName}' not found. Available: ${names}`;
       }
-      const result = await client.deleteList(targetList._id);
-      return formatResponse(result);
+      const dResult = await client.deleteList(targetList._id);
+      return formatResponse(dResult);
+    }
+    
+    case 'search': {
+      if (!parsed.entities.searchQuery) {
+        return '❌ Please provide a search query (e.g., "search for meeting" or "find contract")';
+      }
+      const sResult = await client.search(parsed.entities.searchQuery, {
+        limit: parsed.entities.searchLimit,
+        includeArchived: parsed.entities.includeArchived,
+        includeNotes: parsed.entities.includeNotes,
+      });
+      return formatResponse(sResult);
+    }
+    
+    case 'list_summary': {
+      const sumResult = await client.getListsSummary({ includeArchived: parsed.entities.includeArchived });
+      if (!sumResult.success) return formatResponse(sumResult);
+      if (Array.isArray(sumResult.data)) {
+        let msg = `📋 **Lists Summary**\n`;
+        msg += sumResult.data.map((s: any) => {
+          const nm = s.name || 'Untitled';
+          const tot = s.totalItems ?? s.itemCount ?? '?';
+          const done = s.completedItems ?? s.doneCount ?? '?';
+          return `• **${nm}**: ${tot} items (${done} done)`;
+        }).join('\n');
+        return msg;
+      }
+      return formatResponse(sumResult);
+    }
+    
+    case 'archive_list': {
+      if (!parsed.entities.listName) {
+        return '❌ Please specify which list to archive (e.g., "archive my old project list")';
+      }
+      const arList = await resolveList(parsed.entities.listName);
+      if ('error' in arList) return arList.error;
+      const arResult = await client.archiveList(arList.list._id, true);
+      return formatResponse(arResult);
+    }
+    
+    case 'unarchive_list': {
+      if (!parsed.entities.listName) {
+        return '❌ Please specify which list to unarchive (e.g., "unarchive my project list")';
+      }
+      const uList = await resolveList(parsed.entities.listName);
+      if ('error' in uList) return uList.error;
+      const uResult = await client.archiveList(uList.list._id, false);
+      return formatResponse(uResult);
+    }
+    
+    case 'share_list': {
+      if (!parsed.entities.listName || !parsed.entities.userId) {
+        return '❌ Please specify the list and user to share with (e.g., "share my work list with user@example.com as edit")';
+      }
+      const shList = await resolveList(parsed.entities.listName);
+      if ('error' in shList) return shList.error;
+      const shResult = await client.shareList(shList.list._id, parsed.entities.userId, parsed.entities.permission ?? 'edit');
+      return formatResponse(shResult);
+    }
+    
+    case 'list_users': {
+      if (!parsed.entities.listName) {
+        return '❌ Please specify which list (e.g., "list users for my work list")';
+      }
+      const luList = await resolveList(parsed.entities.listName);
+      if ('error' in luList) return luList.error;
+      const luResult = await client.getListUsers(luList.list._id);
+      return formatResponse(luResult);
+    }
+    
+    case 'remove_list_user': {
+      if (!parsed.entities.listName || !parsed.entities.userId) {
+        return '❌ Please specify the list and user to remove (e.g., "remove user@example.com from my work list")';
+      }
+      const rmList = await resolveList(parsed.entities.listName);
+      if ('error' in rmList) return rmList.error;
+      const rmResult = await client.removeListUser(rmList.list._id, parsed.entities.userId);
+      return formatResponse(rmResult);
+    }
+    
+    case 'update_note': {
+      if (!parsed.entities.itemId || !parsed.entities.noteId || !parsed.entities.note) {
+        return '❌ Please specify item ID, note ID, and new text (e.g., "update note for item abc note xyz: new text")';
+      }
+      const unResult = await client.updateNote(parsed.entities.itemId, parsed.entities.noteId, parsed.entities.note);
+      return formatResponse(unResult);
+    }
+    
+    case 'delete_note': {
+      if (!parsed.entities.itemId || !parsed.entities.noteId) {
+        return '❌ Please specify item ID and note ID (e.g., "delete note for item abc note xyz")';
+      }
+      const dnResult = await client.deleteNote(parsed.entities.itemId, parsed.entities.noteId);
+      return formatResponse(dnResult);
     }
     
     default:
@@ -654,9 +944,11 @@ export async function handleCommand(input: string): Promise<string> {
         `• Mark item 123 as done\n` +
         `• Remove item 456\n` +
         `• Export my today list as html\n` +
-        `• Email my today list to user@example.com\n` +
-        `• Export priority items as json\n` +
-        `• Email priority items to user@example.com`;
+        `• Search for meeting\n` +
+        `• List summary\n` +
+        `• Archive my old project list\n` +
+        `• Share my work list with user@example.com as edit\n` +
+        `• Update note for item abc note xyz: new text`;
   }
 }
 
