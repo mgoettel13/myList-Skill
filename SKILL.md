@@ -306,40 +306,119 @@ Delete a note from an item.
 
 **Keywords:** `delete note`, `remove note`
 
+### 24. Update List User Permission
+Change a user's permission level on a shared list.
+
+| Pattern | Example |
+|---------|--------|
+| `set user [email] permission on my [list] list to [perm]` | `set user alice@example.com permission on my work list to admin` |
+| `change user [email] access on [list] list to [perm]` | `change user bob@example.com access on projects list to read` |
+
+**Permissions:** `read`, `edit`, `admin`
+
+**Keywords:** `update user`, `change user`, `set permission`
+
+### 25. Reorder Lists
+Change the display order of lists.
+
+| Pattern | Example |
+|---------|--------|
+| `reorder lists [id1] [id2] [id3]` | `reorder lists abc123 def456 ghi789` |
+
+**Keywords:** `reorder lists`
+
+### 26. Reorder Items
+Change the display order of items within a list.
+
+| Pattern | Example |
+|---------|--------|
+| `reorder items in my [list] list [id1] [id2]` | `reorder items in my today list abc123 def456` |
+
+**Keywords:** `reorder items`
+
+### 27. Move Completed Items
+Move all completed items from one list to another.
+
+| Pattern | Example |
+|---------|--------|
+| `move completed from my [list] list to my [target] list` | `move completed from my today list to my done list` |
+
+**Keywords:** `move completed`
+
+### 28. Update List
+Rename or update a list's properties.
+
+| Pattern | Example |
+|---------|--------|
+| `rename my [list] list "new name"` | `rename my projects list "Current Projects"` |
+| `update my [list] list` | `update my work list` |
+
+**Keywords:** `update list`, `rename list`, `edit list`
+
+### 29. Get List Details
+View detailed information about a specific list.
+
+| Pattern | Example |
+|---------|--------|
+| `show my [list] list details` | `show my today list details` |
+| `get [list] list info` | `get work list info` |
+
+**Keywords:** `list details`, `list info`
+
 ---
 
 ## API Reference
 
-The skill communicates with the Lister REST API. The following endpoints are used internally:
+The skill uses the **Public API (\`/v1/\`)** endpoints, which are accessible via API key. The **Private API (\`/api/\`)** is reserved for the app frontend and should not be used by integrations.
 
 | Method | Endpoint | Purpose |
-|--------|----------|---------|
-| `GET` | `/api/lists` | Fetch all lists (supports `?includeArchived=true`) |
-| `POST` | `/api/lists` | Create a new list |
-| `DELETE` | `/api/lists/{id}` | Delete a list |
-| `PUT` | `/api/lists/{id}/archive` | Archive/unarchive a list |
-| `GET` | `/api/lists/summary` | Get lists summary with counts |
-| `GET` | `/api/lists/{id}/items` | Get items in a list |
-| `POST` | `/api/lists/{id}/items` | Add an item to a list |
-| `PATCH` | `/api/items/{id}` | Update an item (text, status, priority, archived) |
-| `DELETE` | `/api/items/{id}` | Delete an item |
-| `POST` | `/api/items/{id}/move` | Move item to another list |
-| `POST` | `/api/items/{id}/notes` | Add a note to an item |
-| `PUT` | `/api/items/{id}/notes/{nid}` | Update a note |
-| `DELETE` | `/api/items/{id}/notes/{nid}` | Delete a note |
-| `GET` | `/api/items/priority` | Get all priority items |
-| `GET` | `/api/search` | Search across all lists & items |
-| `POST` | `/api/lists/{id}/share` | Share a list with a user |
-| `GET` | `/api/lists/{id}/users` | Get list users/permissions |
-| `DELETE` | `/api/lists/{id}/users/{uid}` | Remove user from list |
-| `POST` | `/api/lists/{id}/export` | Export a list (JSON/HTML) |
-| `POST` | `/api/lists/{id}/export/email` | Email a list |
-| `POST` | `/api/items/priority/export` | Export priority items (JSON/HTML) |
-| `POST` | `/api/items/priority/export/email` | Email priority items |
+|--------|----------|----------|
+| \`GET\` | \`/v1/lists\` | Fetch all lists (supports \`?includeArchived=true\`) |
+| \`POST\` | \`/v1/lists\` | Create a new list |
+| \`GET\` | \`/v1/lists/{id}\` | Get list details |
+| \`PUT\` | \`/v1/lists/{id}\` | Update a list (name, description, etc.) |
+| \`DELETE\` | \`/v1/lists/{id}\` | Delete a list |
+| \`PUT\` | \`/v1/lists/{id}/archive\` | Archive/unarchive a list |
+| \`PUT\` | \`/v1/lists/reorder\` | Reorder lists |
+| \`GET\` | \`/v1/lists/summary\` | Get lists summary with counts |
+| \`POST\` | \`/v1/lists/defaults\` | Create default starter lists |
+| \`GET\` | \`/v1/lists/{id}/items\` | Get items in a list |
+| \`POST\` | \`/v1/lists/{id}/items\` | Add an item to a list |
+| \`PUT\` | \`/v1/lists/{id}/items/reorder\` | Reorder items in a list |
+| \`POST\` | \`/v1/lists/{id}/items/move-completed\` | Move all completed items to another list |
+| \`POST\` | \`/v1/lists/{id}/share\` | Share a list with a user |
+| \`GET\` | \`/v1/lists/{id}/users\` | Get list users/permissions |
+| \`PUT\` | \`/v1/lists/{id}/users/{uid}\` | Update user permission on a list |
+| \`DELETE\` | \`/v1/lists/{id}/users/{uid}\` | Remove user from list |
+| \`POST\` | \`/v1/lists/{id}/export\` | Export a list (JSON/HTML) |
+| \`POST\` | \`/v1/lists/{id}/export/email\` | Email a list |
+| \`PATCH\` | \`/v1/items/{id}\` | Update an item (text, status, priority, archived) |
+| \`DELETE\` | \`/v1/items/{id}\` | Delete an item |
+| \`POST\` | \`/v1/items/{id}/move\` | Move item to another list |
+| \`POST\` | \`/v1/items/{id}/notes\` | Add a note to an item |
+| \`PUT\` | \`/v1/items/{id}/notes/{nid}\` | Update a note |
+| \`DELETE\` | \`/v1/items/{id}/notes/{nid}\` | Delete a note |
+| \`PATCH\` | \`/v1/items/{id}/notes/{nid}/status\` | Update note status |
+| \`GET\` | \`/v1/items/priority\` | Get all priority items |
+| \`POST\` | \`/v1/items/priority/export\` | Export priority items (JSON/HTML) |
+| \`POST\` | \`/v1/items/priority/export/email\` | Email priority items |
+| \`GET\` | \`/v1/search\` | Search across all lists & items |
 
-**Authentication:** API key via `X-API-Key` header (recommended) or Bearer token via `Authorization` header for all endpoints.
+Auth endpoints remain at \`/api/auth/\` (not \`/v1/\`):
 
-## Response Format
+| Method | Endpoint | Purpose |
+|--------|----------|----------|
+| \`POST\` | \`/api/auth/register\` | Register a new user |
+| \`POST\` | \`/api/auth/login\` | Login |
+| \`POST\` | \`/api/auth/api-keys\` | Create API key |
+| \`GET\` | \`/api/auth/api-keys\` | List API keys |
+| \`DELETE\` | \`/api/auth/api-keys/{id}\` | Delete API key |
+| \`GET\` | \`/api/auth/me\` | Get current user |
+| \`DELETE\` | \`/api/auth/me\` | Delete current user |
+
+**Authentication:** API key via \`X-API-Key\` header (recommended) or Bearer token via \`Authorization\` header for all \`/v1/\` endpoints.
+
+**⚠️ Important:** Always use \`/v1/\` (Public API) endpoints. The \`/api/\` (Private API) endpoints are for the app frontend and may not be accessible via API key in the future.\n\n## Response Format
 
 Responses are formatted with emoji indicators:
 

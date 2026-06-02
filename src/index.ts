@@ -1,6 +1,6 @@
 /**
- * Lister Skill — OpenClaw integration for Lister.ai task management
- * 
+ * Lister Skill - OpenClaw integration for Lister.ai task management
+ *
  * Supports natural language commands:
  * - "Add 'call Notary' to my today list"
  * - "Create a new list called 'Projects'"
@@ -23,12 +23,14 @@ const CONFIG = {
 };
 
 // ─── Types ───────────────────────────────────────────────────────────────────
-type Intent = 'add_item' | 'get_items' | 'get_priority' | 'mark_done' | 
-              'remove_item' | 'update_item' | 'move_item' | 'add_note' | 
+type Intent = 'add_item' | 'get_items' | 'get_priority' | 'mark_done' |
+              'remove_item' | 'update_item' | 'move_item' | 'add_note' |
               'update_note' | 'delete_note' | 'archive_list' | 'unarchive_list' |
-              'export_list' | 'export_priority' | 'email_list' | 'email_priority' | 
+              'export_list' | 'export_priority' | 'email_list' | 'email_priority' |
               'create_list' | 'delete_list' | 'search' | 'list_summary' |
-              'share_list' | 'list_users' | 'remove_list_user' | 'unknown';
+              'share_list' | 'list_users' | 'remove_list_user' | 'update_list_user' |
+              'reorder_lists' | 'reorder_items' | 'move_completed' |
+              'update_list' | 'get_list' | 'unknown';
 
 interface ParsedIntent {
   intent: Intent;
@@ -51,6 +53,8 @@ interface ParsedIntent {
     searchQuery?: string;
     searchLimit?: number;
     includeNotes?: boolean;
+    listIds?: string[];
+    itemIds?: string[];
   };
 }
 
@@ -63,19 +67,19 @@ interface ListerResponse {
 // ─── Intent Parser ───────────────────────────────────────────────────────────
 function parseIntent(input: string): ParsedIntent {
   const lower = input.toLowerCase();
-  
+
   // Extract quoted text
   const quotedMatch = input.match(/["']([^"']+)["']/);
   const itemText = quotedMatch ? quotedMatch[1] : undefined;
-  
+
   // Extract list name: "to my X list", "in my X list", "get my X list", "show X list"
   const listMatch = lower.match(/(?:to|in|on|get|show|view)?\s*(?:my\s+)?(\w+['']?\w*)\s+list/);
   const listName = listMatch ? listMatch[1] : undefined;
-  
+
   // Extract new list name for "create a new list called X" / "create list X"
   const createListMatch = lower.match(/(?:create|make|add)\s*(?:a\s+new\s+)?list\s*(?:called|named|\s)([^\n,]+)/i);
   const newListName = createListMatch ? createListMatch[1].trim() : undefined;
-  
+
   // Extract list name for delete: "delete my X list" or "delete list X"
   // Handles: "delete my work list" → work
   const deleteListMatch = lower.match(/^delete\s+(?:my\s+)?(.+?)\s+list$/i);
@@ -84,88 +88,88 @@ function parseIntent(input: string): ParsedIntent {
   const deleteListAltMatch = lower.match(/^delete\s+list\s+(.+)$/i);
   const deleteListAltName = deleteListAltMatch ? deleteListAltMatch[1].trim() : undefined;
   const finalDeleteListName = deleteListName || deleteListAltName;
-  
+
   // Extract item ID: "item 123" or "id 123" or "#123" or MongoDB ObjectId (24 hex chars)
   const idMatch = lower.match(/(?:item\s*|id\s*|#)([a-f0-9]{24}|\d+)/i);
   const itemId = idMatch ? idMatch[1] : undefined;
-  
+
   // Extract note ID: "note 123" or "note_id 123" or similar (MongoDB ObjectId or numeric)
   const noteIdMatch = lower.match(/note\s*(?:id\s*)?([a-f0-9]{24}|\d+)/i);
   // Only extract noteId if it's explicitly requested (not just an item ID)
   const noteId = /(?:update|edit|change|delete|remove)\s+note/i.test(lower) || /note\s+(?:id\s*)?[a-f0-9]{24}/i.test(lower) ? (noteIdMatch ? noteIdMatch[1] : undefined) : undefined;
-  
+
   // Extract email: "to email@address.com"
   const emailMatch = input.match(/to\s+([\w.+-]+@[\w.-]+\.[a-z]{2,})/i);
   const email = emailMatch ? emailMatch[1] : undefined;
-  
+
   // Extract format: "as json", "as html"
   const formatMatch = lower.match(/as\s+(json|html)/i);
   const format = formatMatch ? formatMatch[1] as 'json' | 'html' : undefined;
-  
+
   // Extract theme: "theme light", "theme dark"
   const themeMatch = lower.match(/theme\s+(light|dark)/i);
   const theme = themeMatch ? themeMatch[1] as 'light' | 'dark' : undefined;
-  
+
   // Include archived flag
   const includeArchived = /include\s+archived|with\s+archived/i.test(lower);
   // Priority flag
   const priority = /priority|urgent|important/i.test(lower);
-  
+
   // ── Intent Classification ──
-  
+
   // Export priority items (check before generic export)
   if (/^export\b/.test(lower) && priority) {
     return { intent: 'export_priority', entities: { format, theme, includeArchived } };
   }
-  
+
   // Email priority items (check before generic email list)
   if (/^email\b/.test(lower) && priority) {
     return { intent: 'email_priority', entities: { email, theme, includeArchived } };
   }
-  
+
   // Export list
   if (/^export\b/.test(lower)) {
     return { intent: 'export_list', entities: { listName, format, theme, includeArchived } };
   }
-  
+
   // Email list
   if (/^email\b/.test(lower) && /list/.test(lower)) {
     return { intent: 'email_list', entities: { listName, email, theme, includeArchived } };
   }
-  
-  // Create list (before add_item — "create a new list called X")
+
+  // Create list (before add_item - "create a new list called X")
   if (/^create\s*(a\s+new)?\s*list/i.test(lower)) {
     return { intent: 'create_list', entities: { listName: newListName } };
   }
-  
+
   // Delete list: "delete my X list" (captures X) or "delete list X" (captures X)
   // For "delete list X": don't use deleteListMatch (it expects 'list' at end)
   const isDeleteListPattern = /^delete\s+(?:my\s+)?.*\s+list$/i.test(lower) || /^delete\s+list\s+/i.test(lower);
   if (isDeleteListPattern && finalDeleteListName) {
     return { intent: 'delete_list', entities: { listName: finalDeleteListName } };
   }
-  
-  // Search (check before get_items — "search for X" vs "search my X list")
+
+  // Search (check before get_items - "search for X" vs "search my X list")
   if (/^(search|find)\b/.test(lower) && !/\blist\b/.test(lower)) {
     const searchQuery = quotedMatch ? quotedMatch[1] : input.replace(/^\s*(?:search|find)\s+(?:for\s+)?/i, '').trim();
     return { intent: 'search', entities: { searchQuery, includeNotes: /with\s+notes/i.test(lower), includeArchived: /include\s+archived|with\s+archived/i.test(lower) } };
   }
-  
+
   // List summary (must come before get_items)
   if (/^(lists?\s+)?summary/i.test(lower) || /get\s+lists?\s+summary/i.test(lower)) {
     return { intent: 'list_summary', entities: { includeArchived: /include\s+archived|with\s+archived/i.test(lower) } };
   }
-  
+
   // Archive list (must come before get_items/delete_item)
   if (/^archive\b/.test(lower) && /\blist\b/.test(lower)) {
     return { intent: 'archive_list', entities: { listName } };
   }
-  
+
   // Unarchive list
   if (/^unarchive\b/.test(lower) && /\blist\b/.test(lower)) {
     return { intent: 'unarchive_list', entities: { listName } };
   }
-  
+
   // Share list with user
   const shareMatch = lower.match(/share\s+(?:my\s+)?(\w+['']?\w*)\s+list\s+with\s+(\S+)/i);
   if (shareMatch) {
@@ -181,22 +185,60 @@ function parseIntent(input: string): ParsedIntent {
   if (removeUserMatch) {
     return { intent: 'remove_list_user', entities: { userId: removeUserMatch[1], listName: removeUserMatch[2] } };
   }
-  
+
   // Update note
   if (/^(update|edit|change|modify)\s+note/i.test(lower)) {
     return { intent: 'update_note', entities: { itemId, noteId, note: quotedMatch ? quotedMatch[1] : undefined } };
   }
-  
+
   // Delete note
   if (/^(delete|remove)\s+note/i.test(lower)) {
     return { intent: 'delete_note', entities: { itemId, noteId } };
   }
-  
+
+  // Reorder lists (must come before add_item)
+  if (/^reorder\s+lists?/i.test(lower)) {
+    // Parse comma-separated list IDs
+    const idMatches = lower.match(/([a-f0-9]{24})/g);
+    return { intent: 'reorder_lists', entities: { listIds: idMatches || undefined } as any };
+  }
+
+  // Reorder items in a list
+  if (/^reorder\s+(?:items\s+)?(?:in\s+)?(?:my\s+)?(\w+)\s+list/i.test(lower)) {
+    const reorderMatch = lower.match(/^reorder\s+(?:items\s+)?(?:in\s+)?(?:my\s+)?(\w+)\s+list/i);
+    const idMatches = lower.match(/([a-f0-9]{24})/g);
+    return { intent: 'reorder_items', entities: { listName: reorderMatch ? reorderMatch[1] : undefined, itemIds: idMatches || undefined } as any };
+  }
+
+  // Move completed items
+  if (/^move\s+completed\s+(?:from\s+)?(?:my\s+)?(\w+)\s+list\s+to\s+(?:my\s+)?(\w+)\s+list/i.test(lower)) {
+    const mcMatch = lower.match(/^move\s+completed\s+(?:from\s+)?(?:my\s+)?(\w+)\s+list\s+to\s+(?:my\s+)?(\w+)\s+list/i);
+    return { intent: 'move_completed', entities: { listName: mcMatch ? mcMatch[1] : undefined, targetListName: mcMatch ? mcMatch[2] : undefined } };
+  }
+
+  // Update list (rename, change description, etc.)
+  if (/^(update|edit|rename|change)\s+(?:my\s+)?(\w+)\s+list/i.test(lower)) {
+    const ulMatch = lower.match(/^(update|edit|rename|change)\s+(?:my\s+)?(\w+)\s+list/i);
+    return { intent: 'update_list', entities: { listName: ulMatch ? ulMatch[2] : undefined, itemText: quotedMatch ? quotedMatch[1] : undefined } };
+  }
+
+  // Update list user permission
+  const updateUserPermMatch = lower.match(/(?:update|change|set)\s+(?:user\s+)?(\S+)\s+(?:permission|access)\s+(?:on|for)\s+(?:my\s+)?(\w+)\s+list\s+to\s+(read|edit|admin)/i);
+  if (updateUserPermMatch) {
+    return { intent: 'update_list_user', entities: { userId: updateUserPermMatch[1], listName: updateUserPermMatch[2], permission: updateUserPermMatch[3] as any } };
+  }
+
+  // Get list details
+  if (/^(get|show|view)\s+(?:my\s+)?(\w+)\s+list\s*(?:details|info)?$/i.test(lower)) {
+    const glMatch = lower.match(/^(get|show|view)\s+(?:my\s+)?(\w+)\s+list/i);
+    return { intent: 'get_list', entities: { listName: glMatch ? glMatch[2] : undefined } };
+  }
+
   // Add item
   if (/^(add|create|new|put)\b/.test(lower)) {
     return { intent: 'add_item', entities: { itemText, listName, priority } };
   }
-  
+
   // Get items / list (generic fallback for show/view/find/list/get + list name)
   if (/^(get|show|list|view|find|search)\b/.test(lower)) {
     if (priority) {
@@ -204,33 +246,33 @@ function parseIntent(input: string): ParsedIntent {
     }
     return { intent: 'get_items', entities: { listName } };
   }
-  
+
   // Mark done
   if (/^(mark|complete|done|finish)\b/.test(lower)) {
     return { intent: 'mark_done', entities: { itemId } };
   }
-  
+
   // Remove item
   if (/^(remove|delete|drop|clear)\b/.test(lower)) {
     return { intent: 'remove_item', entities: { itemId } };
   }
-  
+
   // Update item
   if (/^(update|edit|change|modify|rename)\b/.test(lower)) {
     return { intent: 'update_item', entities: { itemId, itemText } };
   }
-  
+
   // Move item
   if (/^(move|transfer)\b/.test(lower)) {
     return { intent: 'move_item', entities: { itemId, listName } };
   }
-  
+
   // Add note
   if (/^(note|comment|memo)\b/.test(lower)) {
     const nte = quotedMatch ? quotedMatch[1] : undefined;
     return { intent: 'add_note', entities: { itemId, note: nte } };
   }
-  
+
   return { intent: 'unknown', entities: {} };
 }
 
@@ -262,7 +304,7 @@ class ListerClient {
     try {
       const params = new URLSearchParams();
       if (options?.includeArchived) params.set('includeArchived', 'true');
-      const url = `${this.baseUrl}/api/lists${params.toString() ? '?' + params : ''}`;
+      const url = `${this.baseUrl}/v1/lists${params.toString() ? '?' + params : ''}`;
       const res = await fetch(url, {
         headers: this.getAuthHeader(),
       });
@@ -276,7 +318,7 @@ class ListerClient {
 
   async deleteList(listId: string): Promise<ListerResponse> {
     try {
-      const res = await fetch(`${this.baseUrl}/api/lists/${listId}`, {
+      const res = await fetch(`${this.baseUrl}/v1/lists/${listId}`, {
         method: 'DELETE',
         headers: this.getAuthHeader(),
       });
@@ -289,7 +331,7 @@ class ListerClient {
 
   async createList(name: string): Promise<ListerResponse> {
     try {
-      const res = await fetch(`${this.baseUrl}/api/lists`, {
+      const res = await fetch(`${this.baseUrl}/v1/lists`, {
         method: 'POST',
         headers: this.getAuthHeader(),
         body: JSON.stringify({ name }),
@@ -303,7 +345,7 @@ class ListerClient {
 
   async getItems(listId: string): Promise<ListerResponse> {
     try {
-      const res = await fetch(`${this.baseUrl}/api/lists/${listId}/items`, {
+      const res = await fetch(`${this.baseUrl}/v1/lists/${listId}/items`, {
         headers: this.getAuthHeader(),
       });
       const { ok, data } = await this.parseResponse(res);
@@ -322,7 +364,7 @@ class ListerClient {
         status: 'new',
         isPriority,
       };
-      const res = await fetch(`${this.baseUrl}/api/lists/${listId}/items`, {
+      const res = await fetch(`${this.baseUrl}/v1/lists/${listId}/items`, {
         method: 'POST',
         headers: this.getAuthHeader(),
         body: JSON.stringify(body),
@@ -336,7 +378,7 @@ class ListerClient {
 
   async updateItem(itemId: string, updates: Record<string, any>): Promise<ListerResponse> {
     try {
-      const res = await fetch(`${this.baseUrl}/api/items/${itemId}`, {
+      const res = await fetch(`${this.baseUrl}/v1/items/${itemId}`, {
         method: 'PATCH',
         headers: this.getAuthHeader(),
         body: JSON.stringify(updates),
@@ -350,7 +392,7 @@ class ListerClient {
 
   async deleteItem(itemId: string): Promise<ListerResponse> {
     try {
-      const res = await fetch(`${this.baseUrl}/api/items/${itemId}`, {
+      const res = await fetch(`${this.baseUrl}/v1/items/${itemId}`, {
         method: 'DELETE',
         headers: this.getAuthHeader(),
       });
@@ -362,7 +404,7 @@ class ListerClient {
 
   async moveItem(itemId: string, targetListId: string): Promise<ListerResponse> {
     try {
-      const res = await fetch(`${this.baseUrl}/api/items/${itemId}/move`, {
+      const res = await fetch(`${this.baseUrl}/v1/items/${itemId}/move`, {
         method: 'POST',
         headers: this.getAuthHeader(),
         body: JSON.stringify({ targetListId }),
@@ -376,7 +418,7 @@ class ListerClient {
 
   async addNote(itemId: string, content: string): Promise<ListerResponse> {
     try {
-      const res = await fetch(`${this.baseUrl}/api/items/${itemId}/notes`, {
+      const res = await fetch(`${this.baseUrl}/v1/items/${itemId}/notes`, {
         method: 'POST',
         headers: this.getAuthHeader(),
         body: JSON.stringify({ content }),
@@ -390,7 +432,7 @@ class ListerClient {
 
   async getPriorityItems(): Promise<ListerResponse> {
     try {
-      const res = await fetch(`${this.baseUrl}/api/items/priority`, {
+      const res = await fetch(`${this.baseUrl}/v1/items/priority`, {
         headers: this.getAuthHeader(),
       });
       const { ok, data } = await this.parseResponse(res);
@@ -403,7 +445,7 @@ class ListerClient {
 
   async exportList(listId: string, options: { format?: 'json' | 'html'; theme?: 'light' | 'dark'; includeArchived?: boolean; filename?: string }): Promise<ListerResponse> {
     try {
-      const res = await fetch(`${this.baseUrl}/api/lists/${listId}/export`, {
+      const res = await fetch(`${this.baseUrl}/v1/lists/${listId}/export`, {
         method: 'POST',
         headers: this.getAuthHeader(),
         body: JSON.stringify({
@@ -431,7 +473,7 @@ class ListerClient {
 
   async exportPriorityItems(options: { format?: 'json' | 'html'; theme?: 'light' | 'dark'; includeArchived?: boolean; filename?: string }): Promise<ListerResponse> {
     try {
-      const res = await fetch(`${this.baseUrl}/api/items/priority/export`, {
+      const res = await fetch(`${this.baseUrl}/v1/items/priority/export`, {
         method: 'POST',
         headers: this.getAuthHeader(),
         body: JSON.stringify({
@@ -459,7 +501,7 @@ class ListerClient {
 
   async emailList(listId: string, options: { toEmail?: string; theme?: 'light' | 'dark'; includeArchived?: boolean }): Promise<ListerResponse> {
     try {
-      const res = await fetch(`${this.baseUrl}/api/lists/${listId}/export/email`, {
+      const res = await fetch(`${this.baseUrl}/v1/lists/${listId}/export/email`, {
         method: 'POST',
         headers: this.getAuthHeader(),
         body: JSON.stringify({
@@ -477,7 +519,7 @@ class ListerClient {
 
   async emailPriorityItems(options: { toEmail?: string; theme?: 'light' | 'dark'; includeArchived?: boolean }): Promise<ListerResponse> {
     try {
-      const res = await fetch(`${this.baseUrl}/api/items/priority/export/email`, {
+      const res = await fetch(`${this.baseUrl}/v1/items/priority/export/email`, {
         method: 'POST',
         headers: this.getAuthHeader(),
         body: JSON.stringify({
@@ -499,7 +541,7 @@ class ListerClient {
       if (options.limit) params.set('limit', String(options.limit));
       if (options.includeArchived) params.set('include_archived', 'true');
       if (options.includeNotes) params.set('include_notes', 'true');
-      const res = await fetch(`${this.baseUrl}/api/search?${params}`, {
+      const res = await fetch(`${this.baseUrl}/v1/search?${params}`, {
         headers: this.getAuthHeader(),
       });
       const json = await res.json() as any;
@@ -516,7 +558,7 @@ class ListerClient {
     try {
       const params = new URLSearchParams();
       if (options.includeArchived) params.set('includeArchived', 'true');
-      const url = `${this.baseUrl}/api/lists/summary${params.toString() ? '?' + params : ''}`;
+      const url = `${this.baseUrl}/v1/lists/summary${params.toString() ? '?' + params : ''}`;
       const res = await fetch(url, { headers: this.getAuthHeader() });
       const { ok, data } = await this.parseResponse(res);
       return { success: ok, message: 'Lists summary', data };
@@ -527,7 +569,7 @@ class ListerClient {
 
   async archiveList(listId: string, archived: boolean): Promise<ListerResponse> {
     try {
-      const res = await fetch(`${this.baseUrl}/api/lists/${listId}/archive`, {
+      const res = await fetch(`${this.baseUrl}/v1/lists/${listId}/archive`, {
         method: 'PUT',
         headers: this.getAuthHeader(),
         body: JSON.stringify({ archived }),
@@ -541,7 +583,7 @@ class ListerClient {
 
   async shareList(listId: string, userId: string, permission: 'read' | 'edit' | 'admin'): Promise<ListerResponse> {
     try {
-      const res = await fetch(`${this.baseUrl}/api/lists/${listId}/share`, {
+      const res = await fetch(`${this.baseUrl}/v1/lists/${listId}/share`, {
         method: 'POST',
         headers: this.getAuthHeader(),
         body: JSON.stringify({ userId, permission }),
@@ -555,7 +597,7 @@ class ListerClient {
 
   async getListUsers(listId: string): Promise<ListerResponse> {
     try {
-      const res = await fetch(`${this.baseUrl}/api/lists/${listId}/users`, {
+      const res = await fetch(`${this.baseUrl}/v1/lists/${listId}/users`, {
         headers: this.getAuthHeader(),
       });
       const { ok, data } = await this.parseResponse(res);
@@ -568,7 +610,7 @@ class ListerClient {
 
   async removeListUser(listId: string, userId: string): Promise<ListerResponse> {
     try {
-      const res = await fetch(`${this.baseUrl}/api/lists/${listId}/users/${userId}`, {
+      const res = await fetch(`${this.baseUrl}/v1/lists/${listId}/users/${userId}`, {
         method: 'DELETE',
         headers: this.getAuthHeader(),
       });
@@ -579,9 +621,91 @@ class ListerClient {
     }
   }
 
+  async updateListUser(listId: string, userId: string, permission: 'read' | 'edit' | 'admin'): Promise<ListerResponse> {
+    try {
+      const res = await fetch(`${this.baseUrl}/v1/lists/${listId}/users/${userId}`, {
+        method: 'PUT',
+        headers: this.getAuthHeader(),
+        body: JSON.stringify({ permission }),
+      });
+      const data = await res.json() as any;
+      return { success: res.ok, message: res.ok ? `User ${userId} permission updated to ${permission}` : `Failed: ${JSON.stringify(data?.detail ?? res.statusText)}`, data };
+    } catch (err) {
+      return { success: false, message: `Error updating user permission: ${err}` };
+    }
+  }
+
+  async reorderLists(listIds: string[]): Promise<ListerResponse> {
+    try {
+      const res = await fetch(`${this.baseUrl}/v1/lists/reorder`, {
+        method: 'PUT',
+        headers: this.getAuthHeader(),
+        body: JSON.stringify({ listIds }),
+      });
+      const data = await res.json() as any;
+      return { success: res.ok, message: res.ok ? 'Lists reordered' : `Failed: ${JSON.stringify(data?.detail ?? res.statusText)}`, data };
+    } catch (err) {
+      return { success: false, message: `Error reordering lists: ${err}` };
+    }
+  }
+
+  async reorderItems(listId: string, itemIds: string[]): Promise<ListerResponse> {
+    try {
+      const res = await fetch(`${this.baseUrl}/v1/lists/${listId}/items/reorder`, {
+        method: 'PUT',
+        headers: this.getAuthHeader(),
+        body: JSON.stringify({ itemIds }),
+      });
+      const data = await res.json() as any;
+      return { success: res.ok, message: res.ok ? 'Items reordered' : `Failed: ${JSON.stringify(data?.detail ?? res.statusText)}`, data };
+    } catch (err) {
+      return { success: false, message: `Error reordering items: ${err}` };
+    }
+  }
+
+  async moveCompletedItems(listId: string, targetListId: string): Promise<ListerResponse> {
+    try {
+      const res = await fetch(`${this.baseUrl}/v1/lists/${listId}/items/move-completed`, {
+        method: 'POST',
+        headers: this.getAuthHeader(),
+        body: JSON.stringify({ targetListId }),
+      });
+      const data = await res.json() as any;
+      return { success: res.ok, message: res.ok ? 'Completed items moved' : `Failed: ${JSON.stringify(data?.detail ?? res.statusText)}`, data };
+    } catch (err) {
+      return { success: false, message: `Error moving completed items: ${err}` };
+    }
+  }
+
+  async getListItem(listId: string): Promise<ListerResponse> {
+    try {
+      const res = await fetch(`${this.baseUrl}/v1/lists/${listId}`, {
+        headers: this.getAuthHeader(),
+      });
+      const data = await res.json() as any;
+      return { success: res.ok, message: res.ok ? 'List details' : `Failed: ${JSON.stringify(data?.detail ?? res.statusText)}`, data: data?.data ?? data };
+    } catch (err) {
+      return { success: false, message: `Error fetching list: ${err}` };
+    }
+  }
+
+  async updateList(listId: string, updates: Record<string, any>): Promise<ListerResponse> {
+    try {
+      const res = await fetch(`${this.baseUrl}/v1/lists/${listId}`, {
+        method: 'PUT',
+        headers: this.getAuthHeader(),
+        body: JSON.stringify(updates),
+      });
+      const data = await res.json() as any;
+      return { success: res.ok, message: res.ok ? 'List updated' : `Failed: ${JSON.stringify(data?.detail ?? res.statusText)}`, data: data?.data ?? data };
+    } catch (err) {
+      return { success: false, message: `Error updating list: ${err}` };
+    }
+  }
+
   async updateNote(itemId: string, noteId: string, content: string): Promise<ListerResponse> {
     try {
-      const res = await fetch(`${this.baseUrl}/api/items/${itemId}/notes/${noteId}`, {
+      const res = await fetch(`${this.baseUrl}/v1/items/${itemId}/notes/${noteId}`, {
         method: 'PUT',
         headers: this.getAuthHeader(),
         body: JSON.stringify({ content }),
@@ -595,7 +719,7 @@ class ListerClient {
 
   async deleteNote(itemId: string, noteId: string): Promise<ListerResponse> {
     try {
-      const res = await fetch(`${this.baseUrl}/api/items/${itemId}/notes/${noteId}`, {
+      const res = await fetch(`${this.baseUrl}/v1/items/${itemId}/notes/${noteId}`, {
         method: 'DELETE',
         headers: this.getAuthHeader(),
       });
@@ -607,7 +731,7 @@ class ListerClient {
 
   async updateNoteStatus(itemId: string, noteId: string, status: 'new' | 'complete'): Promise<ListerResponse> {
     try {
-      const res = await fetch(`${this.baseUrl}/api/items/${itemId}/notes/${noteId}/status`, {
+      const res = await fetch(`${this.baseUrl}/v1/items/${itemId}/notes/${noteId}/status`, {
         method: 'PATCH',
         headers: this.getAuthHeader(),
         body: JSON.stringify({ status }),
@@ -644,9 +768,9 @@ function formatResponse(response: ListerResponse): string {
   if (!response.success) {
     return `❌ ${response.message}`;
   }
-  
+
   let msg = `✅ ${response.message}\n`;
-  
+
   if (response.data && Array.isArray(response.data)) {
     if (response.data.length === 0) {
       msg += '\n_(empty)_';
@@ -661,7 +785,7 @@ function formatResponse(response: ListerResponse): string {
   } else if (response.data && typeof response.data === 'object') {
     msg += `\n\`\`\`json\n${JSON.stringify(response.data, null, 2)}\n\`\`\``;
   }
-  
+
   return msg;
 }
 
@@ -691,7 +815,7 @@ const client = new ListerClient();
 
 export async function handleCommand(input: string): Promise<string> {
   const parsed = parseIntent(input);
-  
+
   switch (parsed.intent) {
     case 'add_item': {
       if (!parsed.entities.itemText) {
@@ -711,7 +835,7 @@ export async function handleCommand(input: string): Promise<string> {
       );
       return formatResponse(addResult);
     }
-    
+
     case 'get_items': {
       if (!parsed.entities.listName) {
         const result = await client.getLists();
@@ -722,12 +846,12 @@ export async function handleCommand(input: string): Promise<string> {
       const itemsResult = await client.getItems(result.list.id);
       return formatResponse(itemsResult);
     }
-    
+
     case 'get_priority': {
       const result = await client.getPriorityItems();
       return formatResponse(result);
     }
-    
+
     case 'mark_done': {
       if (!parsed.entities.itemId) {
         return '❌ Please specify which item to mark done (e.g., "mark item 123 done")';
@@ -735,7 +859,7 @@ export async function handleCommand(input: string): Promise<string> {
       const result = await client.updateItem(parsed.entities.itemId, { status: 'complete' });
       return formatResponse(result);
     }
-    
+
     case 'remove_item': {
       if (!parsed.entities.itemId) {
         return '❌ Please specify which item to remove (e.g., "remove item 123")';
@@ -743,7 +867,7 @@ export async function handleCommand(input: string): Promise<string> {
       const result = await client.deleteItem(parsed.entities.itemId);
       return formatResponse(result);
     }
-    
+
     case 'update_item': {
       if (!parsed.entities.itemId) {
         return '❌ Please specify which item to update (e.g., "update item 123")';
@@ -754,7 +878,7 @@ export async function handleCommand(input: string): Promise<string> {
       const result = await client.updateItem(parsed.entities.itemId, updates);
       return formatResponse(result);
     }
-    
+
     case 'move_item': {
       if (!parsed.entities.itemId || !parsed.entities.listName) {
         return '❌ Please specify item and target list (e.g., "move item 123 to my work list")';
@@ -764,7 +888,7 @@ export async function handleCommand(input: string): Promise<string> {
       const moveResult = await client.moveItem(parsed.entities.itemId, result.list.id);
       return formatResponse(moveResult);
     }
-    
+
     case 'add_note': {
       if (!parsed.entities.itemId || !parsed.entities.note) {
         return '❌ Please specify item and note (e.g., "note for item 123: \\"remember to call back\\"")';
@@ -772,7 +896,7 @@ export async function handleCommand(input: string): Promise<string> {
       const result = await client.addNote(parsed.entities.itemId, parsed.entities.note);
       return formatResponse(result);
     }
-    
+
     case 'export_list': {
       if (!parsed.entities.listName) {
         return '❌ Please specify which list to export (e.g., "export my today list as html")';
@@ -786,7 +910,7 @@ export async function handleCommand(input: string): Promise<string> {
       });
       return formatResponse(exportResult);
     }
-    
+
     case 'export_priority': {
       const result = await client.exportPriorityItems({
         format: parsed.entities.format,
@@ -795,7 +919,7 @@ export async function handleCommand(input: string): Promise<string> {
       });
       return formatResponse(result);
     }
-    
+
     case 'email_list': {
       if (!parsed.entities.listName) {
         return '❌ Please specify which list to email (e.g., "email my today list to user@example.com")';
@@ -809,7 +933,7 @@ export async function handleCommand(input: string): Promise<string> {
       });
       return formatResponse(emailResult);
     }
-    
+
     case 'email_priority': {
       const result = await client.emailPriorityItems({
         toEmail: parsed.entities.email,
@@ -818,7 +942,7 @@ export async function handleCommand(input: string): Promise<string> {
       });
       return formatResponse(result);
     }
-    
+
     case 'create_list': {
       if (!parsed.entities.listName) {
         return '❌ Please provide a name for the new list (e.g., "create a new list called Projects")';
@@ -826,7 +950,7 @@ export async function handleCommand(input: string): Promise<string> {
       const cResult = await client.createList(parsed.entities.listName);
       return formatResponse(cResult);
     }
-    
+
     case 'delete_list': {
       if (!parsed.entities.listName) {
         return '❌ Please specify which list to delete (e.g., "delete my old list")';
@@ -843,7 +967,7 @@ export async function handleCommand(input: string): Promise<string> {
       const dResult = await client.deleteList(targetList.id);
       return formatResponse(dResult);
     }
-    
+
     case 'search': {
       if (!parsed.entities.searchQuery) {
         return '❌ Please provide a search query (e.g., "search for meeting" or "find contract")';
@@ -855,7 +979,7 @@ export async function handleCommand(input: string): Promise<string> {
       });
       return formatResponse(sResult);
     }
-    
+
     case 'list_summary': {
       const sumResult = await client.getListsSummary({ includeArchived: parsed.entities.includeArchived });
       if (!sumResult.success) return formatResponse(sumResult);
@@ -871,7 +995,7 @@ export async function handleCommand(input: string): Promise<string> {
       }
       return formatResponse(sumResult);
     }
-    
+
     case 'archive_list': {
       if (!parsed.entities.listName) {
         return '❌ Please specify which list to archive (e.g., "archive my old project list")';
@@ -881,7 +1005,7 @@ export async function handleCommand(input: string): Promise<string> {
       const arResult = await client.archiveList(arList.list.id, true);
       return formatResponse(arResult);
     }
-    
+
     case 'unarchive_list': {
       if (!parsed.entities.listName) {
         return '❌ Please specify which list to unarchive (e.g., "unarchive my project list")';
@@ -891,7 +1015,7 @@ export async function handleCommand(input: string): Promise<string> {
       const uResult = await client.archiveList(uList.list.id, false);
       return formatResponse(uResult);
     }
-    
+
     case 'share_list': {
       if (!parsed.entities.listName || !parsed.entities.userId) {
         return '❌ Please specify the list and user to share with (e.g., "share my work list with user@example.com as edit")';
@@ -901,7 +1025,7 @@ export async function handleCommand(input: string): Promise<string> {
       const shResult = await client.shareList(shList.list.id, parsed.entities.userId, parsed.entities.permission ?? 'edit');
       return formatResponse(shResult);
     }
-    
+
     case 'list_users': {
       if (!parsed.entities.listName) {
         return '❌ Please specify which list (e.g., "list users for my work list")';
@@ -911,7 +1035,7 @@ export async function handleCommand(input: string): Promise<string> {
       const luResult = await client.getListUsers(luList.list.id);
       return formatResponse(luResult);
     }
-    
+
     case 'remove_list_user': {
       if (!parsed.entities.listName || !parsed.entities.userId) {
         return '❌ Please specify the list and user to remove (e.g., "remove user@example.com from my work list")';
@@ -921,7 +1045,7 @@ export async function handleCommand(input: string): Promise<string> {
       const rmResult = await client.removeListUser(rmList.list.id, parsed.entities.userId);
       return formatResponse(rmResult);
     }
-    
+
     case 'update_note': {
       if (!parsed.entities.itemId || !parsed.entities.noteId || !parsed.entities.note) {
         return '❌ Please specify item ID, note ID, and new text (e.g., "update note for item abc note xyz: new text")';
@@ -929,7 +1053,7 @@ export async function handleCommand(input: string): Promise<string> {
       const unResult = await client.updateNote(parsed.entities.itemId, parsed.entities.noteId, parsed.entities.note);
       return formatResponse(unResult);
     }
-    
+
     case 'delete_note': {
       if (!parsed.entities.itemId || !parsed.entities.noteId) {
         return '❌ Please specify item ID and note ID (e.g., "delete note for item abc note xyz")';
@@ -937,7 +1061,73 @@ export async function handleCommand(input: string): Promise<string> {
       const dnResult = await client.deleteNote(parsed.entities.itemId, parsed.entities.noteId);
       return formatResponse(dnResult);
     }
-    
+
+    case 'update_list_user': {
+      if (!parsed.entities.listName || !parsed.entities.userId || !parsed.entities.permission) {
+        return '❌ Please specify the list, user, and permission (e.g., "set user user@example.com permission on my work list to edit")';
+      }
+      const uluList = await resolveList(parsed.entities.listName);
+      if ('error' in uluList) return uluList.error;
+      const uluResult = await client.updateListUser(uluList.list.id, parsed.entities.userId, parsed.entities.permission);
+      return formatResponse(uluResult);
+    }
+
+    case 'reorder_lists': {
+      if (!(parsed.entities as any).listIds || !Array.isArray((parsed.entities as any).listIds)) {
+        return '❌ Please specify list IDs to reorder (e.g., "reorder lists id1 id2 id3")';
+      }
+      const rlResult = await client.reorderLists((parsed.entities as any).listIds as string[]);
+      return formatResponse(rlResult);
+    }
+
+    case 'reorder_items': {
+      if (!parsed.entities.listName) {
+        return '❌ Please specify which list to reorder items in (e.g., "reorder items in my today list")';
+      }
+      const riList = await resolveList(parsed.entities.listName);
+      if ('error' in riList) return riList.error;
+      const itemIds = (parsed.entities as any).itemIds as string[] | undefined;
+      if (!itemIds || itemIds.length === 0) {
+        return '❌ Please specify item IDs to reorder';
+      }
+      const riResult = await client.reorderItems(riList.list.id, itemIds);
+      return formatResponse(riResult);
+    }
+
+    case 'move_completed': {
+      if (!parsed.entities.listName || !parsed.entities.targetListName) {
+        return '❌ Please specify source and target list (e.g., "move completed from my today list to my done list")';
+      }
+      const mcList = await resolveList(parsed.entities.listName);
+      if ('error' in mcList) return mcList.error;
+      const mcTarget = await resolveList(parsed.entities.targetListName!);
+      if ('error' in mcTarget) return mcTarget.error;
+      const mcResult = await client.moveCompletedItems(mcList.list.id, mcTarget.list.id);
+      return formatResponse(mcResult);
+    }
+
+    case 'update_list': {
+      if (!parsed.entities.listName) {
+        return '❌ Please specify which list to update (e.g., "rename my today list \"New Name\"")';
+      }
+      const ulList = await resolveList(parsed.entities.listName);
+      if ('error' in ulList) return ulList.error;
+      const updates: Record<string, any> = {};
+      if (parsed.entities.itemText) updates.name = parsed.entities.itemText;
+      const ulResult = await client.updateList(ulList.list.id, updates);
+      return formatResponse(ulResult);
+    }
+
+    case 'get_list': {
+      if (!parsed.entities.listName) {
+        return '❌ Please specify which list (e.g., "show my today list details")';
+      }
+      const glList = await resolveList(parsed.entities.listName);
+      if ('error' in glList) return glList.error;
+      const glResult = await client.getListItem(glList.list.id);
+      return formatResponse(glResult);
+    }
+
     default:
       return `❓ I didn't understand that. Try commands like:\n` +
         `• Add "call Notary" to my today list\n` +
@@ -964,7 +1154,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     console.log('  node dist/index.js mark item 123 done');
     process.exit(1);
   }
-  
+
   handleCommand(input).then(console.log).catch(console.error);
 }
 
