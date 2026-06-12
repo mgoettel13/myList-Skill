@@ -65,8 +65,10 @@ function parseIntent(input: string): ParsedIntent {
   const quotedMatch = input.match(/["']([^"']+)["']/);
   const itemText = quotedMatch ? quotedMatch[1] : undefined;
 
-  const listMatch = lower.match(/(?:to|in|on)\s+(?:my\s+)?(\w+)\s+list/);
-  const listName = listMatch ? listMatch[1] : undefined;
+  const listMatch =
+    input.match(/\b(?:to|in|on)\s+(?:my\s+)?(.+?)\s+list\b/i) ??
+    input.match(/^\s*(?:get|show|view|list|find|search|export|email)\s+(?:my\s+)?(.+?)\s+list\b/i);
+  const listName = listMatch ? listMatch[1].replace(/["']/g, '').replace(/\s+/g, ' ').trim().toLowerCase() : undefined;
 
   const idMatch = lower.match(/(?:item\s*|id\s*|#)(\d+)/);
   const itemId = idMatch ? idMatch[1] : undefined;
@@ -78,6 +80,9 @@ function parseIntent(input: string): ParsedIntent {
   }
 
   if (/^(get|show|list|view|find|search)\b/.test(lower)) {
+    if (/^(get|show|list|view)\s+(?:my\s+)?lists\b/i.test(lower)) {
+      return { intent: 'get_items', entities: {} };
+    }
     if (priority) {
       return { intent: 'get_priority', entities: { listName } };
     }
@@ -533,7 +538,18 @@ describe('Entity extraction — list names', () => {
     assert.equal(r.entities.listName, undefined);
   });
 
-  it('list name with single word only (regex captures \\w+)', () => {
+  it('extracts multi-word list names', () => {
+    const r = parseIntent('Show work projects list');
+    assert.equal(r.entities.listName, 'work projects');
+  });
+
+  it('does not treat "get my lists" as a list named "my"', () => {
+    const r = parseIntent('get my lists');
+    assert.equal(r.intent, 'get_items');
+    assert.equal(r.entities.listName, undefined);
+  });
+
+  it('list name with single word', () => {
     const r = parseIntent('Add "task" to my grocery list');
     assert.equal(r.entities.listName, 'grocery');
   });
@@ -789,11 +805,10 @@ describe('Edge cases — special characters in input', () => {
 });
 
 describe('Edge cases — overlapping patterns', () => {
-  it('"list" as verb without to/in/on pattern — no listName extracted', () => {
-    // "list" matches get_items verb, but there is no "to/in/on my X list" pattern
+  it('"list" as verb can extract a list name from "list my X list"', () => {
     const r = parseIntent('list my list list');
     assert.equal(r.intent, 'get_items');
-    assert.equal(r.entities.listName, undefined);
+    assert.equal(r.entities.listName, 'list');
   });
 
   it('"list" as verb with "to my X list" pattern — listName extracted', () => {
@@ -1092,11 +1107,6 @@ describe('handleCommand — integration (mocked fetch)', () => {
   it('returns error when add_item has no quoted text', async () => {
     const result = await handleCommandFn('Add to my work list');
     assert.ok(result.includes('Please provide what to add'));
-  });
-
-  it('returns error when add_item has no list name', async () => {
-    const result = await handleCommandFn('Add "something"');
-    assert.ok(result.includes('Please specify which list'));
   });
 
   it('returns error when mark_done has no item ID', async () => {

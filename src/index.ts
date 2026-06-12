@@ -13,6 +13,7 @@
  * - "Add note to item 123: remember to call back"
  */
 
+import { fileURLToPath } from 'node:url';
 import fetch from 'node-fetch';
 
 // ─── Configuration ───────────────────────────────────────────────────────────
@@ -64,6 +65,32 @@ interface ListerResponse {
   data?: any;
 }
 
+interface ParsedApiResponse {
+  ok: boolean;
+  status: number;
+  data: any;
+  error?: string;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function normalizeListName(value?: string): string | undefined {
+  if (!value) return undefined;
+  const normalized = value
+    .replace(/["']/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return normalized || undefined;
+}
+
+function extractListName(input: string, verbs: string[] = []): string | undefined {
+  const verbPattern = verbs.length ? `(?:${verbs.map(escapeRegExp).join('|')})\\s+` : '';
+  const pattern = new RegExp(`^\\s*${verbPattern}(?:my\\s+)?(.+?)\\s+list(?:\\b|$)`, 'i');
+  return normalizeListName(input.match(pattern)?.[1]);
+}
+
 // ─── Intent Parser ───────────────────────────────────────────────────────────
 function parseIntent(input: string): ParsedIntent {
   const lower = input.toLowerCase();
@@ -73,8 +100,9 @@ function parseIntent(input: string): ParsedIntent {
   const itemText = quotedMatch ? quotedMatch[1] : undefined;
 
   // Extract list name: "to my X list", "in my X list", "get my X list", "show X list"
-  const listMatch = lower.match(/(?:to|in|on|get|show|view)?\s*(?:my\s+)?(\w+['']?\w*)\s+list/);
-  const listName = listMatch ? listMatch[1] : undefined;
+  const listName =
+    normalizeListName(input.match(/\b(?:to|in|on)\s+(?:my\s+)?(.+?)\s+list\b/i)?.[1]) ??
+    extractListName(input, ['add', 'create', 'put', 'get', 'show', 'view', 'list', 'find', 'search', 'export', 'email', 'archive', 'unarchive', 'update', 'edit', 'rename', 'change']);
 
   // Extract new list name for "create a new list called X" / "create list X"
   const createListMatch = lower.match(/(?:create|make|add)\s*(?:a\s+new\s+)?list\s*(?:called|named|\s)([^\n,]+)/i);
@@ -82,10 +110,10 @@ function parseIntent(input: string): ParsedIntent {
 
   // Extract list name for delete: "delete my X list" or "delete list X"
   // Handles: "delete my work list" → work
-  const deleteListMatch = lower.match(/^delete\s+(?:my\s+)?(.+?)\s+list$/i);
+  const deleteListMatch = input.match(/^delete\s+(?:my\s+)?(.+?)\s+list$/i);
   const deleteListName = deleteListMatch ? deleteListMatch[1].trim() : undefined;
   // Also handle "delete list X": extract X after "delete list "
-  const deleteListAltMatch = lower.match(/^delete\s+list\s+(.+)$/i);
+  const deleteListAltMatch = input.match(/^delete\s+list\s+(.+)$/i);
   const deleteListAltName = deleteListAltMatch ? deleteListAltMatch[1].trim() : undefined;
   const finalDeleteListName = deleteListName || deleteListAltName;
 
@@ -160,6 +188,11 @@ function parseIntent(input: string): ParsedIntent {
     return { intent: 'list_summary', entities: { includeArchived: /include\s+archived|with\s+archived/i.test(lower) } };
   }
 
+  // "get my lists" / "show lists" should list all lists, not look for a list named "my".
+  if (/^(get|show|list|view)\s+(?:my\s+)?lists\b/i.test(lower)) {
+    return { intent: 'get_items', entities: {} };
+  }
+
   // Archive list (must come before get_items/delete_item)
   if (/^archive\b/.test(lower) && /\blist\b/.test(lower)) {
     return { intent: 'archive_list', entities: { listName } };
@@ -171,19 +204,19 @@ function parseIntent(input: string): ParsedIntent {
   }
 
   // Share list with user
-  const shareMatch = lower.match(/share\s+(?:my\s+)?(\w+['']?\w*)\s+list\s+with\s+(\S+)/i);
+  const shareMatch = input.match(/share\s+(?:my\s+)?(.+?)\s+list\s+with\s+(\S+)/i);
   if (shareMatch) {
-    return { intent: 'share_list', entities: { listName: shareMatch[1], userId: shareMatch[2], permission: /as\s+(read|edit|admin)/i.test(lower) ? lower.match(/as\s+(read|edit|admin)/i)![1] as any : 'edit' } };
+    return { intent: 'share_list', entities: { listName: normalizeListName(shareMatch[1]), userId: shareMatch[2], permission: /as\s+(read|edit|admin)/i.test(lower) ? lower.match(/as\s+(read|edit|admin)/i)![1] as any : 'edit' } };
   }
   // "list users of my X list" / "show users for my X list"
-  const listUsersMatch = lower.match(/(?:list|show|get)\s+users\s+(?:for|of)\s+(?:my\s+)?(\w+['']?\w*)\s+list/i);
+  const listUsersMatch = input.match(/(?:list|show|get)\s+users\s+(?:for|of)\s+(?:my\s+)?(.+?)\s+list/i);
   if (listUsersMatch) {
-    return { intent: 'list_users', entities: { listName: listUsersMatch[1] } };
+    return { intent: 'list_users', entities: { listName: normalizeListName(listUsersMatch[1]) } };
   }
   // "remove user X from my Y list"
-  const removeUserMatch = lower.match(/remove\s+user\s+(\S+)\s+from\s+(?:my\s+)?(\w+['']?\w*)\s+list/i);
+  const removeUserMatch = input.match(/remove\s+user\s+(\S+)\s+from\s+(?:my\s+)?(.+?)\s+list/i);
   if (removeUserMatch) {
-    return { intent: 'remove_list_user', entities: { userId: removeUserMatch[1], listName: removeUserMatch[2] } };
+    return { intent: 'remove_list_user', entities: { userId: removeUserMatch[1], listName: normalizeListName(removeUserMatch[2]) } };
   }
 
   // Update note
@@ -204,34 +237,33 @@ function parseIntent(input: string): ParsedIntent {
   }
 
   // Reorder items in a list
-  if (/^reorder\s+(?:items\s+)?(?:in\s+)?(?:my\s+)?(\w+)\s+list/i.test(lower)) {
-    const reorderMatch = lower.match(/^reorder\s+(?:items\s+)?(?:in\s+)?(?:my\s+)?(\w+)\s+list/i);
+  if (/^reorder\s+(?:items\s+)?(?:in\s+)?(?:my\s+)?.+?\s+list/i.test(lower)) {
+    const reorderMatch = input.match(/^reorder\s+(?:items\s+)?(?:in\s+)?(?:my\s+)?(.+?)\s+list/i);
     const idMatches = lower.match(/([a-f0-9]{24})/g);
-    return { intent: 'reorder_items', entities: { listName: reorderMatch ? reorderMatch[1] : undefined, itemIds: idMatches || undefined } as any };
+    return { intent: 'reorder_items', entities: { listName: normalizeListName(reorderMatch?.[1]), itemIds: idMatches || undefined } as any };
   }
 
   // Move completed items
-  if (/^move\s+completed\s+(?:from\s+)?(?:my\s+)?(\w+)\s+list\s+to\s+(?:my\s+)?(\w+)\s+list/i.test(lower)) {
-    const mcMatch = lower.match(/^move\s+completed\s+(?:from\s+)?(?:my\s+)?(\w+)\s+list\s+to\s+(?:my\s+)?(\w+)\s+list/i);
-    return { intent: 'move_completed', entities: { listName: mcMatch ? mcMatch[1] : undefined, targetListName: mcMatch ? mcMatch[2] : undefined } };
+  if (/^move\s+completed\s+(?:from\s+)?(?:my\s+)?.+?\s+list\s+to\s+(?:my\s+)?.+?\s+list/i.test(lower)) {
+    const mcMatch = input.match(/^move\s+completed\s+(?:from\s+)?(?:my\s+)?(.+?)\s+list\s+to\s+(?:my\s+)?(.+?)\s+list/i);
+    return { intent: 'move_completed', entities: { listName: normalizeListName(mcMatch?.[1]), targetListName: normalizeListName(mcMatch?.[2]) } };
   }
 
   // Update list (rename, change description, etc.)
-  if (/^(update|edit|rename|change)\s+(?:my\s+)?(\w+)\s+list/i.test(lower)) {
-    const ulMatch = lower.match(/^(update|edit|rename|change)\s+(?:my\s+)?(\w+)\s+list/i);
-    return { intent: 'update_list', entities: { listName: ulMatch ? ulMatch[2] : undefined, itemText: quotedMatch ? quotedMatch[1] : undefined } };
+  if (/^(update|edit|rename|change)\s+(?:my\s+)?.+?\s+list/i.test(lower)) {
+    const ulMatch = input.match(/^(update|edit|rename|change)\s+(?:my\s+)?(.+?)\s+list/i);
+    return { intent: 'update_list', entities: { listName: normalizeListName(ulMatch?.[2]), itemText: quotedMatch ? quotedMatch[1] : undefined } };
   }
 
   // Update list user permission
-  const updateUserPermMatch = lower.match(/(?:update|change|set)\s+(?:user\s+)?(\S+)\s+(?:permission|access)\s+(?:on|for)\s+(?:my\s+)?(\w+)\s+list\s+to\s+(read|edit|admin)/i);
+  const updateUserPermMatch = input.match(/(?:update|change|set)\s+(?:user\s+)?(\S+)\s+(?:permission|access)\s+(?:on|for)\s+(?:my\s+)?(.+?)\s+list\s+to\s+(read|edit|admin)/i);
   if (updateUserPermMatch) {
-    return { intent: 'update_list_user', entities: { userId: updateUserPermMatch[1], listName: updateUserPermMatch[2], permission: updateUserPermMatch[3] as any } };
+    return { intent: 'update_list_user', entities: { userId: updateUserPermMatch[1], listName: normalizeListName(updateUserPermMatch[2]), permission: updateUserPermMatch[3] as any } };
   }
 
-  // Get list details
-  if (/^(get|show|view)\s+(?:my\s+)?(\w+)\s+list\s*(?:details|info)?$/i.test(lower)) {
-    const glMatch = lower.match(/^(get|show|view)\s+(?:my\s+)?(\w+)\s+list/i);
-    return { intent: 'get_list', entities: { listName: glMatch ? glMatch[2] : undefined } };
+  // Get list details only when explicitly requested. Plain "show X list" lists items.
+  if (/^(get|show|view)\s+(?:my\s+)?.+?\s+list\s+(?:details|info)$/i.test(lower)) {
+    return { intent: 'get_list', entities: { listName } };
   }
 
   // Add item
@@ -293,11 +325,13 @@ class ListerClient {
     };
   }
 
-  private async parseResponse(res: any): Promise<{ ok: boolean; data: any }> {
-    const raw = await res.json() as any;
+  private async parseResponse(res: any): Promise<ParsedApiResponse> {
+    const raw = await res.json().catch(() => null) as any;
     // API wraps data in { success, data } or returns array
-    const items = Array.isArray(raw) ? raw : (raw.data ?? raw);
-    return { ok: res.ok, data: items };
+    const data = Array.isArray(raw) ? raw : (raw?.data ?? raw);
+    const detail = raw?.detail ?? raw?.message ?? raw?.error ?? res.statusText;
+    const error = typeof detail === 'string' ? detail : JSON.stringify(detail);
+    return { ok: res.ok, status: res.status, data, error };
   }
 
   async getLists(options?: { includeArchived?: boolean }): Promise<ListerResponse> {
@@ -308,9 +342,9 @@ class ListerClient {
       const res = await fetch(url, {
         headers: this.getAuthHeader(),
       });
-      const { ok, data } = await this.parseResponse(res);
+      const { ok, data, error } = await this.parseResponse(res);
       const lists = Array.isArray(data) ? data : [];
-      return { success: ok, message: `Found ${lists.length} lists`, data: lists };
+      return { success: ok, message: ok ? `Found ${lists.length} lists` : `Failed: ${error}`, data: lists };
     } catch (err) {
       return { success: false, message: `Error fetching lists: ${err}` };
     }
@@ -348,9 +382,9 @@ class ListerClient {
       const res = await fetch(`${this.baseUrl}/v1/lists/${listId}/items`, {
         headers: this.getAuthHeader(),
       });
-      const { ok, data } = await this.parseResponse(res);
+      const { ok, data, error } = await this.parseResponse(res);
       const items = Array.isArray(data) ? data : [];
-      return { success: ok, message: `Found ${items.length} items`, data: items };
+      return { success: ok, message: ok ? `Found ${items.length} items` : `Failed: ${error}`, data: items };
     } catch (err) {
       return { success: false, message: `Error fetching items: ${err}` };
     }
@@ -435,12 +469,41 @@ class ListerClient {
       const res = await fetch(`${this.baseUrl}/v1/items/priority`, {
         headers: this.getAuthHeader(),
       });
-      const { ok, data } = await this.parseResponse(res);
+      const { ok, status, data, error } = await this.parseResponse(res);
       const items = Array.isArray(data) ? data : [];
-      return { success: ok, message: `Found ${items.length} priority items`, data: items };
+      if (!ok && status === 404 && error === 'Item not found') {
+        return this.getPriorityItemsFallback();
+      }
+      return { success: ok, message: ok ? `Found ${items.length} priority items` : `Failed: ${error}`, data: items };
     } catch (err) {
       return { success: false, message: `Error fetching priority items: ${err}` };
     }
+  }
+
+  private async getPriorityItemsFallback(): Promise<ListerResponse> {
+    const listsResult = await this.getLists();
+    if (!listsResult.success || !Array.isArray(listsResult.data)) {
+      return { success: false, message: `Failed: ${listsResult.message}` };
+    }
+
+    const priorityItems: any[] = [];
+    for (const list of listsResult.data) {
+      const listId = list.id;
+      if (!listId) continue;
+      const itemsResult = await this.getItems(listId);
+      if (!itemsResult.success || !Array.isArray(itemsResult.data)) continue;
+      priorityItems.push(
+        ...itemsResult.data
+          .filter((item: any) => item.isPriority)
+          .map((item: any) => ({ ...item, listName: list.name })),
+      );
+    }
+
+    return {
+      success: true,
+      message: `Found ${priorityItems.length} priority items`,
+      data: priorityItems,
+    };
   }
 
   async exportList(listId: string, options: { format?: 'json' | 'html'; theme?: 'light' | 'dark'; includeArchived?: boolean; filename?: string }): Promise<ListerResponse> {
@@ -560,8 +623,8 @@ class ListerClient {
       if (options.includeArchived) params.set('includeArchived', 'true');
       const url = `${this.baseUrl}/v1/lists/summary${params.toString() ? '?' + params : ''}`;
       const res = await fetch(url, { headers: this.getAuthHeader() });
-      const { ok, data } = await this.parseResponse(res);
-      return { success: ok, message: 'Lists summary', data };
+      const { ok, data, error } = await this.parseResponse(res);
+      return { success: ok, message: ok ? 'Lists summary' : `Failed: ${error}`, data };
     } catch (err) {
       return { success: false, message: `Error fetching lists summary: ${err}` };
     }
@@ -600,9 +663,9 @@ class ListerClient {
       const res = await fetch(`${this.baseUrl}/v1/lists/${listId}/users`, {
         headers: this.getAuthHeader(),
       });
-      const { ok, data } = await this.parseResponse(res);
+      const { ok, data, error } = await this.parseResponse(res);
       const users = Array.isArray(data) ? data : [];
-      return { success: ok, message: `Found ${users.length} users`, data: users };
+      return { success: ok, message: ok ? `Found ${users.length} users` : `Failed: ${error}`, data: users };
     } catch (err) {
       return { success: false, message: `Error fetching list users: ${err}` };
     }
@@ -640,7 +703,7 @@ class ListerClient {
       const res = await fetch(`${this.baseUrl}/v1/lists/reorder`, {
         method: 'PUT',
         headers: this.getAuthHeader(),
-        body: JSON.stringify({ listIds }),
+        body: JSON.stringify({ order: listIds }),
       });
       const data = await res.json() as any;
       return { success: res.ok, message: res.ok ? 'Lists reordered' : `Failed: ${JSON.stringify(data?.detail ?? res.statusText)}`, data };
@@ -654,7 +717,7 @@ class ListerClient {
       const res = await fetch(`${this.baseUrl}/v1/lists/${listId}/items/reorder`, {
         method: 'PUT',
         headers: this.getAuthHeader(),
-        body: JSON.stringify({ itemIds }),
+        body: JSON.stringify({ order: itemIds }),
       });
       const data = await res.json() as any;
       return { success: res.ok, message: res.ok ? 'Items reordered' : `Failed: ${JSON.stringify(data?.detail ?? res.statusText)}`, data };
@@ -1144,7 +1207,7 @@ export async function handleCommand(input: string): Promise<string> {
 }
 
 // ─── CLI Entry Point ─────────────────────────────────────────────────────────
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   const input = process.argv.slice(2).join(' ');
   if (!input) {
     console.log('Usage: node dist/index.js <command>');

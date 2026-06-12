@@ -6,7 +6,8 @@
   "type": "module",
   "scripts": {
     "build": "tsc",
-    "test": "node --experimental-vm-modules dist/test.js"
+    "prepare": "npm run build",
+    "test": "node --experimental-vm-modules dist/index.test.js"
   },
   "keywords": ["openclaw", "skill", "lister", "task-management"],
   "author": "Larry",
