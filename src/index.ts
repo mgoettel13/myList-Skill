@@ -91,17 +91,24 @@ function extractListName(input: string, verbs: string[] = []): string | undefine
   return normalizeListName(input.match(pattern)?.[1]);
 }
 
+function extractQuotedText(input: string): string | undefined {
+  const doubleQuoted = input.match(/"([^"]+)"/);
+  if (doubleQuoted) return doubleQuoted[1];
+  const singleQuoted = input.match(/'([^']+)'/);
+  return singleQuoted ? singleQuoted[1] : undefined;
+}
+
 // ─── Intent Parser ───────────────────────────────────────────────────────────
 function parseIntent(input: string): ParsedIntent {
   const lower = input.toLowerCase();
 
   // Extract quoted text
-  const quotedMatch = input.match(/["']([^"']+)["']/);
-  const itemText = quotedMatch ? quotedMatch[1] : undefined;
+  const itemText = extractQuotedText(input);
 
   // Extract list name: "to my X list", "in my X list", "get my X list", "show X list"
   const listName =
     normalizeListName(input.match(/\b(?:to|in|on)\s+(?:my\s+)?(.+?)\s+list\b/i)?.[1]) ??
+    normalizeListName(input.match(/\badd\s+to\s+(?:my\s+)?(.+?)(?::|$)/i)?.[1]) ??
     extractListName(input, ['add', 'create', 'put', 'get', 'show', 'view', 'list', 'find', 'search', 'export', 'email', 'archive', 'unarchive', 'update', 'edit', 'rename', 'change']);
 
   // Extract new list name for "create a new list called X" / "create list X"
@@ -146,6 +153,10 @@ function parseIntent(input: string): ParsedIntent {
   // ── Intent Classification ──
 
   // Export priority items (check before generic export)
+  if (/^(what|which|show|list|get)\b.*\b(priority|urgent|important)\b.*\b(items?|tasks?)\b/i.test(lower)) {
+    return { intent: 'get_priority', entities: { listName } };
+  }
+
   if (/^export\b/.test(lower) && priority) {
     return { intent: 'export_priority', entities: { format, theme, includeArchived } };
   }
@@ -179,7 +190,7 @@ function parseIntent(input: string): ParsedIntent {
 
   // Search (check before get_items - "search for X" vs "search my X list")
   if (/^(search|find)\b/.test(lower) && !/\blist\b/.test(lower)) {
-    const searchQuery = quotedMatch ? quotedMatch[1] : input.replace(/^\s*(?:search|find)\s+(?:for\s+)?/i, '').trim();
+    const searchQuery = itemText ?? input.replace(/^\s*(?:search|find)\s+(?:for\s+)?/i, '').trim();
     return { intent: 'search', entities: { searchQuery, includeNotes: /with\s+notes/i.test(lower), includeArchived: /include\s+archived|with\s+archived/i.test(lower) } };
   }
 
@@ -221,7 +232,7 @@ function parseIntent(input: string): ParsedIntent {
 
   // Update note
   if (/^(update|edit|change|modify)\s+note/i.test(lower)) {
-    return { intent: 'update_note', entities: { itemId, noteId, note: quotedMatch ? quotedMatch[1] : undefined } };
+    return { intent: 'update_note', entities: { itemId, noteId, note: itemText } };
   }
 
   // Delete note
@@ -252,13 +263,17 @@ function parseIntent(input: string): ParsedIntent {
   // Update list (rename, change description, etc.)
   if (/^(update|edit|rename|change)\s+(?:my\s+)?.+?\s+list/i.test(lower)) {
     const ulMatch = input.match(/^(update|edit|rename|change)\s+(?:my\s+)?(.+?)\s+list/i);
-    return { intent: 'update_list', entities: { listName: normalizeListName(ulMatch?.[2]), itemText: quotedMatch ? quotedMatch[1] : undefined } };
+    return { intent: 'update_list', entities: { listName: normalizeListName(ulMatch?.[2]), itemText } };
   }
 
   // Update list user permission
   const updateUserPermMatch = input.match(/(?:update|change|set)\s+(?:user\s+)?(\S+)\s+(?:permission|access)\s+(?:on|for)\s+(?:my\s+)?(.+?)\s+list\s+to\s+(read|edit|admin)/i);
   if (updateUserPermMatch) {
     return { intent: 'update_list_user', entities: { userId: updateUserPermMatch[1], listName: normalizeListName(updateUserPermMatch[2]), permission: updateUserPermMatch[3] as any } };
+  }
+
+  if (/^(make|set)\b/i.test(lower) && itemText && listName && priority) {
+    return { intent: 'update_item', entities: { itemText, listName, priority: true } };
   }
 
   // Get list details only when explicitly requested. Plain "show X list" lists items.
@@ -301,8 +316,7 @@ function parseIntent(input: string): ParsedIntent {
 
   // Add note
   if (/^(note|comment|memo)\b/.test(lower)) {
-    const nte = quotedMatch ? quotedMatch[1] : undefined;
-    return { intent: 'add_note', entities: { itemId, note: nte } };
+    return { intent: 'add_note', entities: { itemId, note: itemText } };
   }
 
   return { intent: 'unknown', entities: {} };
@@ -932,13 +946,32 @@ export async function handleCommand(input: string): Promise<string> {
     }
 
     case 'update_item': {
-      if (!parsed.entities.itemId) {
+      let itemId = parsed.entities.itemId;
+      if (!itemId && parsed.entities.itemText && parsed.entities.listName && parsed.entities.priority) {
+        const listResult = await resolveList(parsed.entities.listName);
+        if ('error' in listResult) return listResult.error;
+        const itemsResult = await client.getItems(listResult.list.id);
+        if (!itemsResult.success || !Array.isArray(itemsResult.data)) {
+          return `❌ Could not fetch items: ${itemsResult.message}`;
+        }
+        const searchText = parsed.entities.itemText.trim().toLowerCase();
+        const item = itemsResult.data.find((candidate: any) => {
+          const content = String(candidate.content ?? candidate.text ?? candidate.title ?? '').trim().toLowerCase();
+          return content === searchText;
+        });
+        if (!item?.id) {
+          return `❌ Item '${parsed.entities.itemText}' not found in '${parsed.entities.listName}' list`;
+        }
+        itemId = item.id;
+      }
+
+      if (!itemId) {
         return '❌ Please specify which item to update (e.g., "update item 123")';
       }
       const updates: Record<string, any> = {};
-      if (parsed.entities.itemText) updates.content = parsed.entities.itemText;
+      if (parsed.entities.itemText && parsed.entities.itemId) updates.content = parsed.entities.itemText;
       if (parsed.entities.priority) updates.isPriority = true;
-      const result = await client.updateItem(parsed.entities.itemId, updates);
+      const result = await client.updateItem(itemId, updates);
       return formatResponse(result);
     }
 

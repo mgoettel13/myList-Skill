@@ -62,11 +62,13 @@ interface ParsedIntent {
 function parseIntent(input: string): ParsedIntent {
   const lower = input.toLowerCase();
 
-  const quotedMatch = input.match(/["']([^"']+)["']/);
-  const itemText = quotedMatch ? quotedMatch[1] : undefined;
+  const doubleQuoted = input.match(/"([^"]+)"/);
+  const singleQuoted = input.match(/'([^']+)'/);
+  const itemText = doubleQuoted ? doubleQuoted[1] : (singleQuoted ? singleQuoted[1] : undefined);
 
   const listMatch =
     input.match(/\b(?:to|in|on)\s+(?:my\s+)?(.+?)\s+list\b/i) ??
+    input.match(/\badd\s+to\s+(?:my\s+)?(.+?)(?::|$)/i) ??
     input.match(/^\s*(?:get|show|view|list|find|search|export|email)\s+(?:my\s+)?(.+?)\s+list\b/i);
   const listName = listMatch ? listMatch[1].replace(/["']/g, '').replace(/\s+/g, ' ').trim().toLowerCase() : undefined;
 
@@ -74,6 +76,14 @@ function parseIntent(input: string): ParsedIntent {
   const itemId = idMatch ? idMatch[1] : undefined;
 
   const priority = /priority|urgent|important/i.test(lower);
+
+  if (/^(what|which|show|list|get)\b.*\b(priority|urgent|important)\b.*\b(items?|tasks?)\b/i.test(lower)) {
+    return { intent: 'get_priority', entities: { listName } };
+  }
+
+  if (/^(make|set)\b/i.test(lower) && itemText && listName && priority) {
+    return { intent: 'update_item', entities: { itemText, listName, priority: true } };
+  }
 
   if (/^(add|create|new|put)\b/.test(lower)) {
     return { intent: 'add_item', entities: { itemText, listName, priority } };
@@ -106,8 +116,7 @@ function parseIntent(input: string): ParsedIntent {
   }
 
   if (/^(note|comment|memo)\b/.test(lower)) {
-    const note = quotedMatch ? quotedMatch[1] : undefined;
-    return { intent: 'add_note', entities: { itemId, note } };
+    return { intent: 'add_note', entities: { itemId, note: itemText } };
   }
 
   return { intent: 'unknown', entities: {} };
@@ -191,6 +200,13 @@ describe('parseIntent — add_item', () => {
     const r = parseIntent('Put "item" on my chores list');
     assert.equal(r.entities.listName, 'chores');
   });
+
+  it('extracts journal text with apostrophes inside double quotes', () => {
+    const r = parseIntent('Add to my Journal: " it\'s been a tough day. Lots of meetings "');
+    assert.equal(r.intent, 'add_item');
+    assert.equal(r.entities.listName, 'journal');
+    assert.equal(r.entities.itemText, ' it\'s been a tough day. Lots of meetings ');
+  });
 });
 
 describe('parseIntent — get_items', () => {
@@ -267,6 +283,12 @@ describe('parseIntent — get_priority', () => {
   it('find + urgent', () => {
     const r = parseIntent('Find urgent things');
     assert.equal(r.intent, 'get_priority');
+  });
+
+  it('understands natural priority item question', () => {
+    const r = parseIntent('What are my priority items.');
+    assert.equal(r.intent, 'get_priority');
+    assert.equal(r.entities.listName, undefined);
   });
 });
 
@@ -373,6 +395,14 @@ describe('parseIntent — update_item', () => {
   it('no itemText when no quotes provided', () => {
     const r = parseIntent('Update item 42');
     assert.equal(r.entities.itemText, undefined);
+  });
+
+  it('understands make quoted item priority in a named list', () => {
+    const r = parseIntent('Make "Call mama" in Today list a priority');
+    assert.equal(r.intent, 'update_item');
+    assert.equal(r.entities.itemText, 'Call mama');
+    assert.equal(r.entities.listName, 'today');
+    assert.equal(r.entities.priority, true);
   });
 });
 
