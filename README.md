@@ -12,7 +12,7 @@ npm install
 npm run build
 
 # Set environment variables
-export LISTER_BASE_URL="https://lister-api-staging.up.railway.app"
+export LISTER_BASE_URL="https://api.mylister.dev"
 export LISTER_API_KEY="your-api-key-here"
 ```
 
@@ -47,12 +47,17 @@ console.log(response);
 | Update item | `update item [id] to "new text"` |
 | Move item | `move item [id] to my [list] list` |
 | Add note | `note for item [id]: "text"` |
+| Item comments | `comment on item [id]: "text"` |
+| Note comments | `comment on note [note_id] for item [id]: "text"` |
+| Reminders | `add "task" to my today list reminder tomorrow at 9am` |
+| Notebook lists | `create a new list called Journal notebook` |
+| Move completed | `move completed to bottom of my today list` |
 
 ## API
 
-- **Base URL:** `https://lister-api-staging.up.railway.app`
-- **Auth:** Bearer token
-- **Endpoints:** `/api/lists`, `/api/items`, `/api/items/priority`
+- **Base URL:** `https://api.mylister.dev`
+- **Auth:** API key via `X-API-Key`
+- **Endpoints:** `/v1/lists`, `/v1/items`, `/v1/items/priority`, `/v1/items/{id}/comments`, `/v1/items/{id}/notes/{note_id}/comments`
 
 ## License
 

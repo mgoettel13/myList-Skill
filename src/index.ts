@@ -18,7 +18,7 @@ import fetch from 'node-fetch';
 
 // ─── Configuration ───────────────────────────────────────────────────────────
 const CONFIG = {
-  baseUrl: process.env.LISTER_BASE_URL || 'https://lister-api-staging.up.railway.app',
+  baseUrl: process.env.LISTER_BASE_URL || 'https://api.mylister.dev',
   apiKey: process.env.LISTER_API_KEY || '',
   defaultListName: 'Quick Takes',
 };
@@ -31,7 +31,10 @@ type Intent = 'add_item' | 'get_items' | 'get_priority' | 'mark_done' |
               'create_list' | 'delete_list' | 'search' | 'list_summary' |
               'share_list' | 'list_users' | 'remove_list_user' | 'update_list_user' |
               'reorder_lists' | 'reorder_items' | 'move_completed' |
-              'update_list' | 'get_list' | 'unknown';
+              'update_list' | 'get_list' | 'get_item' |
+              'add_item_comment' | 'get_item_comments' | 'update_item_comment' | 'delete_item_comment' |
+              'add_note_comment' | 'get_note_comments' | 'update_note_comment' | 'delete_note_comment' |
+              'unknown';
 
 interface ParsedIntent {
   intent: Intent;
@@ -41,6 +44,7 @@ interface ParsedIntent {
     targetListName?: string;
     itemId?: string;
     noteId?: string;
+    commentId?: string;
     priority?: boolean;
     note?: string;
     noteStatus?: 'new' | 'complete';
@@ -56,6 +60,8 @@ interface ParsedIntent {
     includeNotes?: boolean;
     listIds?: string[];
     itemIds?: string[];
+    listType?: 'standard' | 'notebook';
+    reminder?: any;
   };
 }
 
@@ -96,6 +102,39 @@ function extractQuotedText(input: string): string | undefined {
   if (doubleQuoted) return doubleQuoted[1];
   const singleQuoted = input.match(/'([^']+)'/);
   return singleQuoted ? singleQuoted[1] : undefined;
+}
+
+function parseSimpleReminder(input: string): any | undefined {
+  const lower = input.toLowerCase();
+  const match = input.match(/\b(?:remind(?:er)?|remind me)\s+(?:at|on|for)?\s*(.+)$/i);
+  if (!match && !/\bremind(?:er)?\b/.test(lower)) return undefined;
+
+  const now = new Date();
+  let remindAt: Date | undefined;
+  const timeMatch = lower.match(/\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b/);
+  const applyTime = (date: Date) => {
+    if (!timeMatch) return date;
+    let hours = Number(timeMatch[1]);
+    const minutes = Number(timeMatch[2] ?? 0);
+    const meridiem = timeMatch[3];
+    if (meridiem === 'pm' && hours < 12) hours += 12;
+    if (meridiem === 'am' && hours === 12) hours = 0;
+    date.setHours(hours, minutes, 0, 0);
+    return date;
+  };
+
+  if (/\btomorrow\b/.test(lower)) {
+    remindAt = new Date(now);
+    remindAt.setDate(remindAt.getDate() + 1);
+    remindAt = applyTime(remindAt);
+  } else if (/\btoday\b/.test(lower)) {
+    remindAt = applyTime(new Date(now));
+  } else if (match) {
+    const parsed = new Date(match[1]);
+    if (!Number.isNaN(parsed.getTime())) remindAt = parsed;
+  }
+
+  return remindAt ? { remindAt: remindAt.toISOString() } : undefined;
 }
 
 // ─── Intent Parser ───────────────────────────────────────────────────────────
@@ -149,6 +188,46 @@ function parseIntent(input: string): ParsedIntent {
   const includeArchived = /include\s+archived|with\s+archived/i.test(lower);
   // Priority flag
   const priority = /priority|urgent|important/i.test(lower);
+  const reminder = parseSimpleReminder(input);
+  const listType = /\bnotebook|journal\b/i.test(lower) ? 'notebook' : undefined;
+
+  const updateItemCommentMatch = input.match(/^(?:update|edit|change)\s+comment\s+([a-f0-9]{24}|\d+)\s+(?:on|for)\s+item\s+([a-f0-9]{24}|\d+)/i);
+  if (updateItemCommentMatch) {
+    return { intent: 'update_item_comment', entities: { commentId: updateItemCommentMatch[1], itemId: updateItemCommentMatch[2], note: itemText } };
+  }
+  const deleteItemCommentMatch = input.match(/^(?:delete|remove)\s+comment\s+([a-f0-9]{24}|\d+)\s+(?:on|from|for)\s+item\s+([a-f0-9]{24}|\d+)/i);
+  if (deleteItemCommentMatch) {
+    return { intent: 'delete_item_comment', entities: { commentId: deleteItemCommentMatch[1], itemId: deleteItemCommentMatch[2] } };
+  }
+  const getItemCommentsMatch = input.match(/^(?:show|get|list|view)\s+comments\s+(?:on|for)\s+item\s+([a-f0-9]{24}|\d+)/i);
+  if (getItemCommentsMatch) {
+    return { intent: 'get_item_comments', entities: { itemId: getItemCommentsMatch[1] } };
+  }
+  const addItemCommentMatch = input.match(/^comment\s+(?:on|for)\s+item\s+([a-f0-9]{24}|\d+)/i);
+  if (addItemCommentMatch) {
+    return { intent: 'add_item_comment', entities: { itemId: addItemCommentMatch[1], note: itemText } };
+  }
+
+  const updateNoteCommentMatch = input.match(/^(?:update|edit|change)\s+comment\s+([a-f0-9]{24}|\d+)\s+(?:on|for)\s+note\s+([a-f0-9]{24}|\d+)\s+(?:on|for)\s+item\s+([a-f0-9]{24}|\d+)/i);
+  if (updateNoteCommentMatch) {
+    return { intent: 'update_note_comment', entities: { commentId: updateNoteCommentMatch[1], noteId: updateNoteCommentMatch[2], itemId: updateNoteCommentMatch[3], note: itemText } };
+  }
+  const deleteNoteCommentMatch = input.match(/^(?:delete|remove)\s+comment\s+([a-f0-9]{24}|\d+)\s+(?:on|from|for)\s+note\s+([a-f0-9]{24}|\d+)\s+(?:on|for)\s+item\s+([a-f0-9]{24}|\d+)/i);
+  if (deleteNoteCommentMatch) {
+    return { intent: 'delete_note_comment', entities: { commentId: deleteNoteCommentMatch[1], noteId: deleteNoteCommentMatch[2], itemId: deleteNoteCommentMatch[3] } };
+  }
+  const getNoteCommentsMatch = input.match(/^(?:show|get|list|view)\s+comments\s+(?:on|for)\s+note\s+([a-f0-9]{24}|\d+)\s+(?:on|for)\s+item\s+([a-f0-9]{24}|\d+)/i);
+  if (getNoteCommentsMatch) {
+    return { intent: 'get_note_comments', entities: { noteId: getNoteCommentsMatch[1], itemId: getNoteCommentsMatch[2] } };
+  }
+  const addNoteCommentMatch = input.match(/^comment\s+(?:on|for)\s+note\s+([a-f0-9]{24}|\d+)\s+(?:on|for)\s+item\s+([a-f0-9]{24}|\d+)/i);
+  if (addNoteCommentMatch) {
+    return { intent: 'add_note_comment', entities: { noteId: addNoteCommentMatch[1], itemId: addNoteCommentMatch[2], note: itemText } };
+  }
+
+  if (/^(?:show|get|view)\s+item\s+([a-f0-9]{24}|\d+)(?:\s+(?:details|info))?$/i.test(lower)) {
+    return { intent: 'get_item', entities: { itemId } };
+  }
 
   // ── Intent Classification ──
 
@@ -178,7 +257,7 @@ function parseIntent(input: string): ParsedIntent {
 
   // Create list (before add_item - "create a new list called X")
   if (/^create\s*(a\s+new)?\s*list/i.test(lower)) {
-    return { intent: 'create_list', entities: { listName: newListName } };
+    return { intent: 'create_list', entities: { listName: newListName, listType } };
   }
 
   // Delete list: "delete my X list" (captures X) or "delete list X" (captures X)
@@ -257,7 +336,11 @@ function parseIntent(input: string): ParsedIntent {
   // Move completed items
   if (/^move\s+completed\s+(?:from\s+)?(?:my\s+)?.+?\s+list\s+to\s+(?:my\s+)?.+?\s+list/i.test(lower)) {
     const mcMatch = input.match(/^move\s+completed\s+(?:from\s+)?(?:my\s+)?(.+?)\s+list\s+to\s+(?:my\s+)?(.+?)\s+list/i);
-    return { intent: 'move_completed', entities: { listName: normalizeListName(mcMatch?.[1]), targetListName: normalizeListName(mcMatch?.[2]) } };
+    return { intent: 'move_completed', entities: { listName: normalizeListName(mcMatch?.[1]) } };
+  }
+  if (/^move\s+completed\s+(?:items\s+)?(?:to\s+(?:the\s+)?)?bottom\s+(?:of|in)\s+(?:my\s+)?.+?\s+list/i.test(lower)) {
+    const mcMatch = input.match(/^move\s+completed\s+(?:items\s+)?(?:to\s+(?:the\s+)?)?bottom\s+(?:of|in)\s+(?:my\s+)?(.+?)\s+list/i);
+    return { intent: 'move_completed', entities: { listName: normalizeListName(mcMatch?.[1]) } };
   }
 
   // Update list (rename, change description, etc.)
@@ -283,7 +366,7 @@ function parseIntent(input: string): ParsedIntent {
 
   // Add item
   if (/^(add|create|new|put)\b/.test(lower)) {
-    return { intent: 'add_item', entities: { itemText, listName, priority } };
+    return { intent: 'add_item', entities: { itemText, listName, priority, reminder } };
   }
 
   // Get items / list (generic fallback for show/view/find/list/get + list name)
@@ -306,7 +389,7 @@ function parseIntent(input: string): ParsedIntent {
 
   // Update item
   if (/^(update|edit|change|modify|rename)\b/.test(lower)) {
-    return { intent: 'update_item', entities: { itemId, itemText } };
+    return { intent: 'update_item', entities: { itemId, itemText, reminder } };
   }
 
   // Move item
@@ -315,7 +398,7 @@ function parseIntent(input: string): ParsedIntent {
   }
 
   // Add note
-  if (/^(note|comment|memo)\b/.test(lower)) {
+  if (/^(note|memo)\b/.test(lower)) {
     return { intent: 'add_note', entities: { itemId, note: itemText } };
   }
 
@@ -377,12 +460,12 @@ class ListerClient {
     }
   }
 
-  async createList(name: string): Promise<ListerResponse> {
+  async createList(name: string, type?: 'standard' | 'notebook'): Promise<ListerResponse> {
     try {
       const res = await fetch(`${this.baseUrl}/v1/lists`, {
         method: 'POST',
         headers: this.getAuthHeader(),
-        body: JSON.stringify({ name }),
+        body: JSON.stringify({ name, ...(type ? { type } : {}) }),
       });
       const data = await res.json() as any;
       return { success: res.ok, message: res.ok ? `List '${name}' created` : `Failed: ${data?.detail ?? res.statusText}`, data };
@@ -404,13 +487,14 @@ class ListerClient {
     }
   }
 
-  async addItem(listId: string, content: string, isPriority: boolean): Promise<ListerResponse> {
+  async addItem(listId: string, content: string, isPriority: boolean, reminder?: any): Promise<ListerResponse> {
     try {
       const body = {
         content,
         type: 'text',
         status: 'new',
         isPriority,
+        ...(reminder ? { reminder } : {}),
       };
       const res = await fetch(`${this.baseUrl}/v1/lists/${listId}/items`, {
         method: 'POST',
@@ -435,6 +519,18 @@ class ListerClient {
       return { success: res.ok, message: res.ok ? 'Item updated' : `Failed: ${JSON.stringify(data?.detail ?? res.statusText)}`, data };
     } catch (err) {
       return { success: false, message: `Error updating item: ${err}` };
+    }
+  }
+
+  async getItem(itemId: string): Promise<ListerResponse> {
+    try {
+      const res = await fetch(`${this.baseUrl}/v1/items/${itemId}`, {
+        headers: this.getAuthHeader(),
+      });
+      const { ok, data, error } = await this.parseResponse(res);
+      return { success: ok, message: ok ? 'Item details' : `Failed: ${error}`, data };
+    } catch (err) {
+      return { success: false, message: `Error fetching item: ${err}` };
     }
   }
 
@@ -475,6 +571,112 @@ class ListerClient {
       return { success: res.ok, message: res.ok ? 'Note added' : `Failed: ${JSON.stringify(data?.detail ?? res.statusText)}`, data };
     } catch (err) {
       return { success: false, message: `Error adding note: ${err}` };
+    }
+  }
+
+  async addItemComment(itemId: string, content: string): Promise<ListerResponse> {
+    try {
+      const res = await fetch(`${this.baseUrl}/v1/items/${itemId}/comments`, {
+        method: 'POST',
+        headers: this.getAuthHeader(),
+        body: JSON.stringify({ content }),
+      });
+      const { ok, data, error } = await this.parseResponse(res);
+      return { success: ok, message: ok ? 'Comment added' : `Failed: ${error}`, data };
+    } catch (err) {
+      return { success: false, message: `Error adding item comment: ${err}` };
+    }
+  }
+
+  async getItemComments(itemId: string): Promise<ListerResponse> {
+    try {
+      const res = await fetch(`${this.baseUrl}/v1/items/${itemId}/comments`, {
+        headers: this.getAuthHeader(),
+      });
+      const { ok, data, error } = await this.parseResponse(res);
+      const comments = Array.isArray(data) ? data : [];
+      return { success: ok, message: ok ? `Found ${comments.length} comments` : `Failed: ${error}`, data: comments };
+    } catch (err) {
+      return { success: false, message: `Error fetching item comments: ${err}` };
+    }
+  }
+
+  async updateItemComment(itemId: string, commentId: string, content: string): Promise<ListerResponse> {
+    try {
+      const res = await fetch(`${this.baseUrl}/v1/items/${itemId}/comments/${commentId}`, {
+        method: 'PUT',
+        headers: this.getAuthHeader(),
+        body: JSON.stringify({ content }),
+      });
+      const { ok, data, error } = await this.parseResponse(res);
+      return { success: ok, message: ok ? 'Comment updated' : `Failed: ${error}`, data };
+    } catch (err) {
+      return { success: false, message: `Error updating item comment: ${err}` };
+    }
+  }
+
+  async deleteItemComment(itemId: string, commentId: string): Promise<ListerResponse> {
+    try {
+      const res = await fetch(`${this.baseUrl}/v1/items/${itemId}/comments/${commentId}`, {
+        method: 'DELETE',
+        headers: this.getAuthHeader(),
+      });
+      return { success: res.ok, message: res.ok ? 'Comment deleted' : 'Failed to delete comment' };
+    } catch (err) {
+      return { success: false, message: `Error deleting item comment: ${err}` };
+    }
+  }
+
+  async addNoteComment(itemId: string, noteId: string, content: string): Promise<ListerResponse> {
+    try {
+      const res = await fetch(`${this.baseUrl}/v1/items/${itemId}/notes/${noteId}/comments`, {
+        method: 'POST',
+        headers: this.getAuthHeader(),
+        body: JSON.stringify({ content }),
+      });
+      const { ok, data, error } = await this.parseResponse(res);
+      return { success: ok, message: ok ? 'Note comment added' : `Failed: ${error}`, data };
+    } catch (err) {
+      return { success: false, message: `Error adding note comment: ${err}` };
+    }
+  }
+
+  async getNoteComments(itemId: string, noteId: string): Promise<ListerResponse> {
+    try {
+      const res = await fetch(`${this.baseUrl}/v1/items/${itemId}/notes/${noteId}/comments`, {
+        headers: this.getAuthHeader(),
+      });
+      const { ok, data, error } = await this.parseResponse(res);
+      const comments = Array.isArray(data) ? data : [];
+      return { success: ok, message: ok ? `Found ${comments.length} note comments` : `Failed: ${error}`, data: comments };
+    } catch (err) {
+      return { success: false, message: `Error fetching note comments: ${err}` };
+    }
+  }
+
+  async updateNoteComment(itemId: string, noteId: string, commentId: string, content: string): Promise<ListerResponse> {
+    try {
+      const res = await fetch(`${this.baseUrl}/v1/items/${itemId}/notes/${noteId}/comments/${commentId}`, {
+        method: 'PUT',
+        headers: this.getAuthHeader(),
+        body: JSON.stringify({ content }),
+      });
+      const { ok, data, error } = await this.parseResponse(res);
+      return { success: ok, message: ok ? 'Note comment updated' : `Failed: ${error}`, data };
+    } catch (err) {
+      return { success: false, message: `Error updating note comment: ${err}` };
+    }
+  }
+
+  async deleteNoteComment(itemId: string, noteId: string, commentId: string): Promise<ListerResponse> {
+    try {
+      const res = await fetch(`${this.baseUrl}/v1/items/${itemId}/notes/${noteId}/comments/${commentId}`, {
+        method: 'DELETE',
+        headers: this.getAuthHeader(),
+      });
+      return { success: res.ok, message: res.ok ? 'Note comment deleted' : 'Failed to delete note comment' };
+    } catch (err) {
+      return { success: false, message: `Error deleting note comment: ${err}` };
     }
   }
 
@@ -740,15 +942,14 @@ class ListerClient {
     }
   }
 
-  async moveCompletedItems(listId: string, targetListId: string): Promise<ListerResponse> {
+  async moveCompletedItems(listId: string): Promise<ListerResponse> {
     try {
       const res = await fetch(`${this.baseUrl}/v1/lists/${listId}/items/move-completed`, {
         method: 'POST',
         headers: this.getAuthHeader(),
-        body: JSON.stringify({ targetListId }),
       });
       const data = await res.json() as any;
-      return { success: res.ok, message: res.ok ? 'Completed items moved' : `Failed: ${JSON.stringify(data?.detail ?? res.statusText)}`, data };
+      return { success: res.ok, message: res.ok ? 'Completed items moved to bottom' : `Failed: ${JSON.stringify(data?.detail ?? res.statusText)}`, data };
     } catch (err) {
       return { success: false, message: `Error moving completed items: ${err}` };
     }
@@ -909,6 +1110,7 @@ export async function handleCommand(input: string): Promise<string> {
         result.list.id,
         parsed.entities.itemText,
         parsed.entities.priority ?? false,
+        parsed.entities.reminder,
       );
       return formatResponse(addResult);
     }
@@ -971,7 +1173,16 @@ export async function handleCommand(input: string): Promise<string> {
       const updates: Record<string, any> = {};
       if (parsed.entities.itemText && parsed.entities.itemId) updates.content = parsed.entities.itemText;
       if (parsed.entities.priority) updates.isPriority = true;
+      if (parsed.entities.reminder) updates.reminder = parsed.entities.reminder;
       const result = await client.updateItem(itemId, updates);
+      return formatResponse(result);
+    }
+
+    case 'get_item': {
+      if (!parsed.entities.itemId) {
+        return '❌ Please specify which item to show (e.g., "show item 123")';
+      }
+      const result = await client.getItem(parsed.entities.itemId);
       return formatResponse(result);
     }
 
@@ -990,6 +1201,70 @@ export async function handleCommand(input: string): Promise<string> {
         return '❌ Please specify item and note (e.g., "note for item 123: \\"remember to call back\\"")';
       }
       const result = await client.addNote(parsed.entities.itemId, parsed.entities.note);
+      return formatResponse(result);
+    }
+
+    case 'add_item_comment': {
+      if (!parsed.entities.itemId || !parsed.entities.note) {
+        return '❌ Please specify item and comment (e.g., "comment on item 123: \\"looks good\\"")';
+      }
+      const result = await client.addItemComment(parsed.entities.itemId, parsed.entities.note);
+      return formatResponse(result);
+    }
+
+    case 'get_item_comments': {
+      if (!parsed.entities.itemId) {
+        return '❌ Please specify an item ID (e.g., "show comments for item 123")';
+      }
+      const result = await client.getItemComments(parsed.entities.itemId);
+      return formatResponse(result);
+    }
+
+    case 'update_item_comment': {
+      if (!parsed.entities.itemId || !parsed.entities.commentId || !parsed.entities.note) {
+        return '❌ Please specify item ID, comment ID, and new text';
+      }
+      const result = await client.updateItemComment(parsed.entities.itemId, parsed.entities.commentId, parsed.entities.note);
+      return formatResponse(result);
+    }
+
+    case 'delete_item_comment': {
+      if (!parsed.entities.itemId || !parsed.entities.commentId) {
+        return '❌ Please specify item ID and comment ID';
+      }
+      const result = await client.deleteItemComment(parsed.entities.itemId, parsed.entities.commentId);
+      return formatResponse(result);
+    }
+
+    case 'add_note_comment': {
+      if (!parsed.entities.itemId || !parsed.entities.noteId || !parsed.entities.note) {
+        return '❌ Please specify item, note, and comment text';
+      }
+      const result = await client.addNoteComment(parsed.entities.itemId, parsed.entities.noteId, parsed.entities.note);
+      return formatResponse(result);
+    }
+
+    case 'get_note_comments': {
+      if (!parsed.entities.itemId || !parsed.entities.noteId) {
+        return '❌ Please specify item ID and note ID';
+      }
+      const result = await client.getNoteComments(parsed.entities.itemId, parsed.entities.noteId);
+      return formatResponse(result);
+    }
+
+    case 'update_note_comment': {
+      if (!parsed.entities.itemId || !parsed.entities.noteId || !parsed.entities.commentId || !parsed.entities.note) {
+        return '❌ Please specify item ID, note ID, comment ID, and new text';
+      }
+      const result = await client.updateNoteComment(parsed.entities.itemId, parsed.entities.noteId, parsed.entities.commentId, parsed.entities.note);
+      return formatResponse(result);
+    }
+
+    case 'delete_note_comment': {
+      if (!parsed.entities.itemId || !parsed.entities.noteId || !parsed.entities.commentId) {
+        return '❌ Please specify item ID, note ID, and comment ID';
+      }
+      const result = await client.deleteNoteComment(parsed.entities.itemId, parsed.entities.noteId, parsed.entities.commentId);
       return formatResponse(result);
     }
 
@@ -1043,7 +1318,7 @@ export async function handleCommand(input: string): Promise<string> {
       if (!parsed.entities.listName) {
         return '❌ Please provide a name for the new list (e.g., "create a new list called Projects")';
       }
-      const cResult = await client.createList(parsed.entities.listName);
+      const cResult = await client.createList(parsed.entities.listName, parsed.entities.listType);
       return formatResponse(cResult);
     }
 
@@ -1191,14 +1466,12 @@ export async function handleCommand(input: string): Promise<string> {
     }
 
     case 'move_completed': {
-      if (!parsed.entities.listName || !parsed.entities.targetListName) {
-        return '❌ Please specify source and target list (e.g., "move completed from my today list to my done list")';
+      if (!parsed.entities.listName) {
+        return '❌ Please specify which list (e.g., "move completed to bottom of my today list")';
       }
       const mcList = await resolveList(parsed.entities.listName);
       if ('error' in mcList) return mcList.error;
-      const mcTarget = await resolveList(parsed.entities.targetListName!);
-      if ('error' in mcTarget) return mcTarget.error;
-      const mcResult = await client.moveCompletedItems(mcList.list.id, mcTarget.list.id);
+      const mcResult = await client.moveCompletedItems(mcList.list.id);
       return formatResponse(mcResult);
     }
 

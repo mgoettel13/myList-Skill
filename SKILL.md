@@ -17,6 +17,9 @@ Use this skill whenever the user wants to manage tasks, to-do items, or lists us
 - **"update item"** — change an item's text or priority
 - **"move item"** — transfer an item to another list
 - **"note for item"** — attach a note to an item
+- **"comment on item"** — add, view, update, or delete comments on shared items
+- **"comment on note"** — add, view, update, or delete comments on item notes
+- **"reminder"** — add or update simple item reminders
 - **"export list"** — export a list as JSON or HTML
 - **"email list"** — email a list to someone
 - **"export priority"** — export all priority items
@@ -28,8 +31,8 @@ The following environment variables must be set before invoking the skill:
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `LISTER_BASE_URL` | No | Lister API base URL. Defaults to `https://lister-api-staging.up.railway.app` |
-| `LISTER_API_KEY` | **Yes** | Bearer token for authenticating with the Lister API |
+| `LISTER_BASE_URL` | No | Lister API base URL. Defaults to `https://api.mylister.dev` |
+| `LISTER_API_KEY` | **Yes** | API key for authenticating with the Lister API via `X-API-Key` |
 
 ## How to Invoke
 
@@ -58,6 +61,7 @@ Add a new task to a specific list. Use quotes for the task text. Mark items as p
 | `create "text" in [list] list` | `create "review contract" in work list` |
 | `put "text" on my [list] list` | `put "walk the dog" on my errands list` |
 | `add "text" to my [list] list` (priority) | `add "fix server outage" to my today list urgent` |
+| `add "text" to my [list] list reminder tomorrow at 9am` | `add "call Mama" to my today list reminder tomorrow at 9am` |
 
 **Keywords:** `add`, `create`, `new`, `put`
 
@@ -133,15 +137,34 @@ Transfer an item from its current list to another list.
 **Keywords:** `move`, `transfer`
 
 ### 8. Add Note
-Attach a note/comment to an item.
+Attach a note to an item.
 
 | Pattern | Example |
 |---------|---------|
 | `note for item [id]: "text"` | `note for item 123: "remember to bring documents"` |
-| `comment for item [id]: "text"` | `comment for item 456: "follow up next week"` |
 | `memo for item [id]: "text"` | `memo for item 789: "waiting on response"` |
 
-**Keywords:** `note`, `comment`, `memo`
+**Keywords:** `note`, `memo`
+
+### 8a. Item Comments
+Add, view, update, or delete comments on an item. This is useful for shared items.
+
+| Pattern | Example |
+|---------|---------|
+| `comment on item [id]: "text"` | `comment on item 123: "looks good"` |
+| `show comments for item [id]` | `show comments for item 123` |
+| `update comment [comment_id] on item [id] to "text"` | `update comment 456 on item 123 to "updated"` |
+| `delete comment [comment_id] from item [id]` | `delete comment 456 from item 123` |
+
+### 8b. Note Comments
+Add, view, update, or delete comments on a note attached to an item.
+
+| Pattern | Example |
+|---------|---------|
+| `comment on note [note_id] for item [id]: "text"` | `comment on note 456 for item 123: "agree"` |
+| `show comments for note [note_id] on item [id]` | `show comments for note 456 on item 123` |
+| `update comment [comment_id] on note [note_id] for item [id] to "text"` | `update comment 789 on note 456 for item 123 to "updated"` |
+| `delete comment [comment_id] from note [note_id] on item [id]` | `delete comment 789 from note 456 on item 123` |
 
 ### 9. Export List
 Export a list to JSON or HTML format.
@@ -196,6 +219,7 @@ Create a new list.
 |---------|---------|
 | `create a new list called [name]` | `create a new list called Projects` |
 | `make a new list named [name]` | `make a new list named Work` |
+| `create a new list called [name] notebook` | `create a new list called Journal notebook` |
 
 **Keywords:** `create`, `make`, `add`
 
@@ -222,7 +246,7 @@ Search across all lists and items.
 
 **Keywords:** `search`, `find` (combined with search terms, not list name)
 
-**Note:** Use `with notes` or `include notes` to include note content in search results.
+**Note:** The production API includes notes by default; `with notes` remains supported for clarity.
 
 ### 16. Lists Summary
 Get a summary of all lists with item counts.
@@ -385,20 +409,29 @@ The skill uses the **Public API (\`/v1/\`)** endpoints, which are accessible via
 | \`GET\` | \`/v1/lists/{id}/items\` | Get items in a list |
 | \`POST\` | \`/v1/lists/{id}/items\` | Add an item to a list |
 | \`PUT\` | \`/v1/lists/{id}/items/reorder\` | Reorder items in a list |
-| \`POST\` | \`/v1/lists/{id}/items/move-completed\` | Move all completed items to another list |
+| \`POST\` | \`/v1/lists/{id}/items/move-completed\` | Move completed items to the bottom of the same list |
 | \`POST\` | \`/v1/lists/{id}/share\` | Share a list with a user |
 | \`GET\` | \`/v1/lists/{id}/users\` | Get list users/permissions |
 | \`PUT\` | \`/v1/lists/{id}/users/{uid}\` | Update user permission on a list |
 | \`DELETE\` | \`/v1/lists/{id}/users/{uid}\` | Remove user from list |
 | \`POST\` | \`/v1/lists/{id}/export\` | Export a list (JSON/HTML) |
 | \`POST\` | \`/v1/lists/{id}/export/email\` | Email a list |
-| \`PATCH\` | \`/v1/items/{id}\` | Update an item (text, status, priority, archived) |
+| \`GET\` | \`/v1/items/{id}\` | Get item details |
+| \`PATCH\` | \`/v1/items/{id}\` | Update an item (text, status, priority, archived, reminder) |
 | \`DELETE\` | \`/v1/items/{id}\` | Delete an item |
+| \`POST\` | \`/v1/items/{id}/comments\` | Add an item comment |
+| \`GET\` | \`/v1/items/{id}/comments\` | Get item comments |
+| \`PUT\` | \`/v1/items/{id}/comments/{cid}\` | Update an item comment |
+| \`DELETE\` | \`/v1/items/{id}/comments/{cid}\` | Delete an item comment |
 | \`POST\` | \`/v1/items/{id}/move\` | Move item to another list |
 | \`POST\` | \`/v1/items/{id}/notes\` | Add a note to an item |
 | \`PUT\` | \`/v1/items/{id}/notes/{nid}\` | Update a note |
 | \`DELETE\` | \`/v1/items/{id}/notes/{nid}\` | Delete a note |
 | \`PATCH\` | \`/v1/items/{id}/notes/{nid}/status\` | Update note status |
+| \`POST\` | \`/v1/items/{id}/notes/{nid}/comments\` | Add a note comment |
+| \`GET\` | \`/v1/items/{id}/notes/{nid}/comments\` | Get note comments |
+| \`PUT\` | \`/v1/items/{id}/notes/{nid}/comments/{cid}\` | Update a note comment |
+| \`DELETE\` | \`/v1/items/{id}/notes/{nid}/comments/{cid}\` | Delete a note comment |
 | \`GET\` | \`/v1/items/priority\` | Get all priority items |
 | \`POST\` | \`/v1/items/priority/export\` | Export priority items (JSON/HTML) |
 | \`POST\` | \`/v1/items/priority/export/email\` | Email priority items |
@@ -463,10 +496,13 @@ lister-skill/
 4. **The skill auto-resolves list names to IDs** — users don't need to know internal list IDs; they use friendly names.
 5. **If the list doesn't exist**, the skill will report an error — it does **not** auto-create lists. The user must create the list first or use an existing one.
 6. **Archived lists** are automatically included in list name resolution — if a list name isn't found in active lists, the skill searches archived lists too.
-7. **Search** uses the `/api/search` endpoint and returns `{success, data, totalResults}` — items are in the `data` array.
+7. **Search** uses the `/v1/search` endpoint. The production API includes note content by default.
 8. **Sharing** requires a user ID (email) and permission level (`read`, `edit`, or `admin`).
 9. **Item statuses** can be `new`, `in-progress`, or `complete` (the `in-progress` status is new).
 10. **Item creation** no longer requires `listId` in the request body — it's derived from the URL path.
 11. **API key creation** now returns `201 Created` (was `200 OK`).
 12. **Note creation** now returns `201 Created` (was `200 OK`).
 13. **User self-deletion** is now supported (`DELETE /api/auth/me` returns `200`).
+14. **Comments are first-class resources** on both items and notes. Use the comment endpoints instead of treating item comments as notes.
+15. **Move completed** reorders completed items to the bottom of the same list; it no longer moves them to another list.
+16. **Notebook lists** are created by passing `type: "notebook"` when the user asks for a notebook or journal list.

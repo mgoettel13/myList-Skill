@@ -46,7 +46,10 @@ import assert from 'node:assert/strict';
 // source we wouldn't need this duplication.
 
 type Intent = 'add_item' | 'get_items' | 'get_priority' | 'mark_done' |
-              'remove_item' | 'update_item' | 'move_item' | 'add_note' | 'unknown';
+              'remove_item' | 'update_item' | 'move_item' | 'add_note' |
+              'add_item_comment' | 'get_item_comments' | 'update_item_comment' | 'delete_item_comment' |
+              'add_note_comment' | 'get_note_comments' | 'update_note_comment' | 'delete_note_comment' |
+              'unknown';
 
 interface ParsedIntent {
   intent: Intent;
@@ -54,6 +57,8 @@ interface ParsedIntent {
     itemText?: string;
     listName?: string;
     itemId?: string;
+    noteId?: string;
+    commentId?: string;
     priority?: boolean;
     note?: string;
   };
@@ -76,6 +81,40 @@ function parseIntent(input: string): ParsedIntent {
   const itemId = idMatch ? idMatch[1] : undefined;
 
   const priority = /priority|urgent|important/i.test(lower);
+
+  const updateItemCommentMatch = input.match(/^(?:update|edit|change)\s+comment\s+(\d+)\s+(?:on|for)\s+item\s+(\d+)/i);
+  if (updateItemCommentMatch) {
+    return { intent: 'update_item_comment', entities: { commentId: updateItemCommentMatch[1], itemId: updateItemCommentMatch[2], note: itemText } };
+  }
+  const deleteItemCommentMatch = input.match(/^(?:delete|remove)\s+comment\s+(\d+)\s+(?:on|from|for)\s+item\s+(\d+)/i);
+  if (deleteItemCommentMatch) {
+    return { intent: 'delete_item_comment', entities: { commentId: deleteItemCommentMatch[1], itemId: deleteItemCommentMatch[2] } };
+  }
+  const getItemCommentsMatch = input.match(/^(?:show|get|list|view)\s+comments\s+(?:on|for)\s+item\s+(\d+)/i);
+  if (getItemCommentsMatch) {
+    return { intent: 'get_item_comments', entities: { itemId: getItemCommentsMatch[1] } };
+  }
+  const addItemCommentMatch = input.match(/^comment\s+(?:on|for)\s+item\s+(\d+)/i);
+  if (addItemCommentMatch) {
+    return { intent: 'add_item_comment', entities: { itemId: addItemCommentMatch[1], note: itemText } };
+  }
+
+  const updateNoteCommentMatch = input.match(/^(?:update|edit|change)\s+comment\s+(\d+)\s+(?:on|for)\s+note\s+(\d+)\s+(?:on|for)\s+item\s+(\d+)/i);
+  if (updateNoteCommentMatch) {
+    return { intent: 'update_note_comment', entities: { commentId: updateNoteCommentMatch[1], noteId: updateNoteCommentMatch[2], itemId: updateNoteCommentMatch[3], note: itemText } };
+  }
+  const deleteNoteCommentMatch = input.match(/^(?:delete|remove)\s+comment\s+(\d+)\s+(?:on|from|for)\s+note\s+(\d+)\s+(?:on|for)\s+item\s+(\d+)/i);
+  if (deleteNoteCommentMatch) {
+    return { intent: 'delete_note_comment', entities: { commentId: deleteNoteCommentMatch[1], noteId: deleteNoteCommentMatch[2], itemId: deleteNoteCommentMatch[3] } };
+  }
+  const getNoteCommentsMatch = input.match(/^(?:show|get|list|view)\s+comments\s+(?:on|for)\s+note\s+(\d+)\s+(?:on|for)\s+item\s+(\d+)/i);
+  if (getNoteCommentsMatch) {
+    return { intent: 'get_note_comments', entities: { noteId: getNoteCommentsMatch[1], itemId: getNoteCommentsMatch[2] } };
+  }
+  const addNoteCommentMatch = input.match(/^comment\s+(?:on|for)\s+note\s+(\d+)\s+(?:on|for)\s+item\s+(\d+)/i);
+  if (addNoteCommentMatch) {
+    return { intent: 'add_note_comment', entities: { noteId: addNoteCommentMatch[1], itemId: addNoteCommentMatch[2], note: itemText } };
+  }
 
   if (/^(what|which|show|list|get)\b.*\b(priority|urgent|important)\b.*\b(items?|tasks?)\b/i.test(lower)) {
     return { intent: 'get_priority', entities: { listName } };
@@ -115,7 +154,7 @@ function parseIntent(input: string): ParsedIntent {
     return { intent: 'move_item', entities: { itemId, listName } };
   }
 
-  if (/^(note|comment|memo)\b/.test(lower)) {
+  if (/^(note|memo)\b/.test(lower)) {
     return { intent: 'add_note', entities: { itemId, note: itemText } };
   }
 
@@ -441,13 +480,6 @@ describe('parseIntent — add_note', () => {
     assert.equal(r.entities.note, 'call back tomorrow');
   });
 
-  it('detects "comment" verb', () => {
-    const r = parseIntent('Comment on item 12: "looks good"');
-    assert.equal(r.intent, 'add_note');
-    assert.equal(r.entities.itemId, '12');
-    assert.equal(r.entities.note, 'looks good');
-  });
-
   it('detects "memo" verb', () => {
     const r = parseIntent('Memo item 3: "check budget"');
     assert.equal(r.intent, 'add_note');
@@ -465,6 +497,68 @@ describe('parseIntent — add_note', () => {
     const r = parseIntent('Note "something"');
     assert.equal(r.entities.itemId, undefined);
     assert.equal(r.entities.note, 'something');
+  });
+});
+
+describe('parseIntent — comments', () => {
+  it('adds an item comment', () => {
+    const r = parseIntent('Comment on item 12: "looks good"');
+    assert.equal(r.intent, 'add_item_comment');
+    assert.equal(r.entities.itemId, '12');
+    assert.equal(r.entities.note, 'looks good');
+  });
+
+  it('gets item comments', () => {
+    const r = parseIntent('Show comments for item 12');
+    assert.equal(r.intent, 'get_item_comments');
+    assert.equal(r.entities.itemId, '12');
+  });
+
+  it('updates an item comment', () => {
+    const r = parseIntent('Update comment 34 on item 12 to "changed"');
+    assert.equal(r.intent, 'update_item_comment');
+    assert.equal(r.entities.commentId, '34');
+    assert.equal(r.entities.itemId, '12');
+    assert.equal(r.entities.note, 'changed');
+  });
+
+  it('deletes an item comment', () => {
+    const r = parseIntent('Delete comment 34 from item 12');
+    assert.equal(r.intent, 'delete_item_comment');
+    assert.equal(r.entities.commentId, '34');
+    assert.equal(r.entities.itemId, '12');
+  });
+
+  it('adds a note comment', () => {
+    const r = parseIntent('Comment on note 56 for item 12: "note reply"');
+    assert.equal(r.intent, 'add_note_comment');
+    assert.equal(r.entities.noteId, '56');
+    assert.equal(r.entities.itemId, '12');
+    assert.equal(r.entities.note, 'note reply');
+  });
+
+  it('gets note comments', () => {
+    const r = parseIntent('Show comments for note 56 on item 12');
+    assert.equal(r.intent, 'get_note_comments');
+    assert.equal(r.entities.noteId, '56');
+    assert.equal(r.entities.itemId, '12');
+  });
+
+  it('updates a note comment', () => {
+    const r = parseIntent('Update comment 34 on note 56 for item 12 to "changed"');
+    assert.equal(r.intent, 'update_note_comment');
+    assert.equal(r.entities.commentId, '34');
+    assert.equal(r.entities.noteId, '56');
+    assert.equal(r.entities.itemId, '12');
+    assert.equal(r.entities.note, 'changed');
+  });
+
+  it('deletes a note comment', () => {
+    const r = parseIntent('Delete comment 34 from note 56 on item 12');
+    assert.equal(r.intent, 'delete_note_comment');
+    assert.equal(r.entities.commentId, '34');
+    assert.equal(r.entities.noteId, '56');
+    assert.equal(r.entities.itemId, '12');
   });
 });
 
