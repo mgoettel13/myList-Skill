@@ -31,8 +31,8 @@ The following environment variables must be set before invoking the skill:
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `LISTER_BASE_URL` | No | Lister API base URL. Defaults to `https://api.mylister.com` |
-| `LISTER_API_KEY` | **Yes** | API key for authenticating with the Lister API via `X-API-Key` and `Authorization: Bearer` |
+| `LISTER_BASE_URL` | No | Lister API base URL. Defaults to `https://api.mylister.dev` |
+| `LISTER_API_KEY` | **Yes** | API key for authenticating with the Lister API via `X-API-Key` |
 
 ## How to Invoke
 
@@ -393,7 +393,7 @@ View detailed information about a specific list.
 
 ## API Reference
 
-The skill uses the **Public API (`/v1/`)** endpoints on `https://api.mylister.com`, which are accessible via API key.
+The skill uses the **Public API (`/v1/`)** endpoints on `https://api.mylister.dev`, which are accessible via API key.
 
 | Method | Endpoint | Purpose |
 |--------|----------|----------|
@@ -437,9 +437,9 @@ The skill uses the **Public API (`/v1/`)** endpoints on `https://api.mylister.co
 | \`POST\` | \`/v1/items/priority/export/email\` | Email priority items |
 | \`GET\` | \`/v1/search\` | Search across all lists & items |
 
-**Authentication:** API key via `X-API-Key` header and `Authorization: Bearer` header for all `/v1/` endpoints.
+**Authentication:** API key via the `X-API-Key` header for all `/v1/` endpoints. Bearer tokens are not accepted on this public API surface.
 
-**Important:** Always use `/v1/` endpoints on `api.mylister.com`. The skill validates JSON responses and reports redirects or non-JSON responses as API routing errors.
+**Important:** Always use `/v1/` endpoints on `api.mylister.dev`. The skill validates JSON responses and reports redirects or non-JSON responses as API routing errors.
 
 ## Response Format
 
@@ -492,7 +492,7 @@ lister-skill/
 10. **Item creation** no longer requires `listId` in the request body — it's derived from the URL path.
 11. **API key creation** now returns `201 Created` (was `200 OK`).
 12. **Note creation** now returns `201 Created` (was `200 OK`).
-13. **The public API host is `https://api.mylister.com`**. Override `LISTER_BASE_URL` only for staging or local testing.
+13. **The public API host is `https://api.mylister.dev`**. Override `LISTER_BASE_URL` only for staging or local testing.
 14. **Comments are first-class resources** on both items and notes. Use the comment endpoints instead of treating item comments as notes.
 15. **Move completed** reorders completed items to the bottom of the same list; it no longer moves them to another list.
 16. **Notebook lists** are created by passing `type: "notebook"` when the user asks for a notebook or journal list.

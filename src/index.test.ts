@@ -252,16 +252,16 @@ describe('configuration', () => {
   it('documents the production API host in source', async () => {
     const fs = await import('node:fs/promises');
     const source = await fs.readFile(new URL('../src/index.ts', import.meta.url), 'utf8');
-    assert.ok(source.includes("https://api.mylister.com"));
-    assert.ok(!source.includes("https://api.mylister.dev"));
+    assert.ok(source.includes("https://api.mylister.dev"));
+    assert.ok(!source.includes("https://api.mylister.com"));
     assert.ok(!source.includes("https://app.mylister.com"));
   });
 
-  it('sends both supported API key headers', async () => {
+  it('uses the public API key header only', async () => {
     const fs = await import('node:fs/promises');
     const source = await fs.readFile(new URL('../src/index.ts', import.meta.url), 'utf8');
     assert.ok(source.includes("'X-API-Key': this.apiKey"));
-    assert.ok(source.includes("'Authorization': `Bearer ${this.apiKey}`"));
+    assert.ok(!source.includes("'Authorization':"));
   });
 });
 

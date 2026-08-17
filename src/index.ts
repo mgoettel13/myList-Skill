@@ -18,7 +18,7 @@ import fetch from 'node-fetch';
 
 // ─── Configuration ───────────────────────────────────────────────────────────
 const CONFIG = {
-  baseUrl: process.env.LISTER_BASE_URL || 'https://api.mylister.com',
+  baseUrl: process.env.LISTER_BASE_URL || 'https://api.mylister.dev',
   apiKey: process.env.LISTER_API_KEY || '',
   defaultListName: 'Quick Takes',
 };
@@ -424,7 +424,6 @@ class ListerClient {
   private getAuthHeader(): Record<string, string> {
     return {
       'X-API-Key': this.apiKey,
-      'Authorization': `Bearer ${this.apiKey}`,
       'Accept': 'application/json',
       'Content-Type': 'application/json',
     };

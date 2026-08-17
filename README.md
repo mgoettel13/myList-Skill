@@ -12,7 +12,7 @@ npm install
 npm run build
 
 # Set environment variables
-export LISTER_BASE_URL="https://api.mylister.com"
+export LISTER_BASE_URL="https://api.mylister.dev"
 export LISTER_API_KEY="your-api-key-here"
 ```
 
@@ -55,8 +55,8 @@ console.log(response);
 
 ## API
 
-- **Base URL:** `https://api.mylister.com`
-- **Auth:** API key via `X-API-Key` and `Authorization: Bearer`
+- **Base URL:** `https://api.mylister.dev`
+- **Auth:** API key via `X-API-Key`
 - **Endpoints:** `/v1/lists`, `/v1/items`, `/v1/items/priority`, `/v1/items/{id}/comments`, `/v1/items/{id}/notes/{note_id}/comments`
 
 ## License
