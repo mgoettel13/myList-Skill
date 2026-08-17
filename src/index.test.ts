@@ -49,7 +49,7 @@ type Intent = 'add_item' | 'get_items' | 'get_priority' | 'mark_done' |
               'remove_item' | 'update_item' | 'move_item' | 'add_note' |
               'add_item_comment' | 'get_item_comments' | 'update_item_comment' | 'delete_item_comment' |
               'add_note_comment' | 'get_note_comments' | 'update_note_comment' | 'delete_note_comment' |
-              'unknown';
+              'create_list' | 'unknown';
 
 interface ParsedIntent {
   intent: Intent;
@@ -61,6 +61,15 @@ interface ParsedIntent {
     commentId?: string;
     priority?: boolean;
     note?: string;
+    notes?: string[];
+    comments?: string[];
+    listType?: 'standard' | 'notebook' | 'project';
+    project?: {
+      startDate?: string;
+      endDate?: string;
+      durationMinutes?: number;
+      assignedTo?: string;
+    };
   };
 }
 
@@ -81,6 +90,29 @@ function parseIntent(input: string): ParsedIntent {
   const itemId = idMatch ? idMatch[1] : undefined;
 
   const priority = /priority|urgent|important/i.test(lower);
+  const inlineNotes = [...input.matchAll(/\b(?:with\s+)?notes?\s*:\s*"([^"]+)"/gi), ...input.matchAll(/\b(?:with\s+)?notes?\s+"([^"]+)"/gi)].map(m => m[1]);
+  const inlineComments = [...input.matchAll(/\b(?:with\s+)?comments?\s*:\s*"([^"]+)"/gi), ...input.matchAll(/\b(?:with\s+)?comments?\s+"([^"]+)"/gi)].map(m => m[1]);
+  const project: ParsedIntent['entities']['project'] = {};
+  const startDate = input.match(/\bstart(?:s|ing)?\s+(?:on\s+)?(\d{4}-\d{2}-\d{2})/i)?.[1];
+  const endDate = input.match(/\b(?:end(?:s|ing)?|due)\s+(?:on\s+)?(\d{4}-\d{2}-\d{2})/i)?.[1];
+  const duration = input.match(/\b(?:duration|for)\s+(\d+)\s*(minutes?|mins?|hours?|hrs?)\b/i);
+  const assignedTo = input.match(/\bassign(?:ed)?\s+to\s+([\w.+-]+@[\w.-]+\.[a-z]{2,}|\S+)/i)?.[1];
+  if (startDate) project.startDate = startDate;
+  if (endDate) project.endDate = endDate;
+  if (duration) project.durationMinutes = Number(duration[1]) * (/hours?|hrs?/i.test(duration[2]) ? 60 : 1);
+  if (assignedTo) project.assignedTo = assignedTo;
+
+  const createTypedListMatch = input.match(/(?:create|make|add)\s*(?:a\s+new\s+)?(standard|notebook|journal|project)\s+list\s*(?:called|named|\s)([^\n,]+)/i);
+  const createListMatch = input.match(/(?:create|make|add)\s*(?:a\s+new\s+)?list\s*(?:called|named|\s)([^\n,]+)/i);
+  const explicitCreateListType = createTypedListMatch?.[1]?.toLowerCase() === 'journal' ? 'notebook' : createTypedListMatch?.[1]?.toLowerCase();
+  const listType = (explicitCreateListType as 'standard' | 'notebook' | 'project' | undefined) ??
+    (/\bproject\b/i.test(lower) ? 'project' : (/\bnotebook|journal\b/i.test(lower) ? 'notebook' : undefined));
+
+  if (/^create\s*(a\s+new)?\s*(?:standard|notebook|journal|project)?\s*list/i.test(lower)) {
+    const rawName = createTypedListMatch ? createTypedListMatch[2] : createListMatch?.[1];
+    const listName = createTypedListMatch ? rawName?.trim() : rawName?.replace(/\s+(?:standard|notebook|journal|project)\s*$/i, '').trim();
+    return { intent: 'create_list', entities: { listName, listType } };
+  }
 
   const updateItemCommentMatch = input.match(/^(?:update|edit|change)\s+comment\s+(\d+)\s+(?:on|for)\s+item\s+(\d+)/i);
   if (updateItemCommentMatch) {
@@ -125,7 +157,17 @@ function parseIntent(input: string): ParsedIntent {
   }
 
   if (/^(add|create|new|put)\b/.test(lower)) {
-    return { intent: 'add_item', entities: { itemText, listName, priority } };
+    return {
+      intent: 'add_item',
+      entities: {
+        itemText,
+        listName,
+        priority,
+        notes: inlineNotes.length ? inlineNotes : undefined,
+        comments: inlineComments.length ? inlineComments : undefined,
+        project: Object.keys(project).length ? project : undefined,
+      },
+    };
   }
 
   if (/^(get|show|list|view|find|search)\b/.test(lower)) {
@@ -245,6 +287,52 @@ describe('parseIntent — add_item', () => {
     assert.equal(r.intent, 'add_item');
     assert.equal(r.entities.listName, 'journal');
     assert.equal(r.entities.itemText, ' it\'s been a tough day. Lots of meetings ');
+  });
+
+  it('extracts inline create note', () => {
+    const r = parseIntent('Add "Ship dashboard" to my work list with note "Needs QA"');
+    assert.equal(r.intent, 'add_item');
+    assert.deepEqual(r.entities.notes, ['Needs QA']);
+  });
+
+  it('extracts inline create comment', () => {
+    const r = parseIntent('Add "Review launch plan" to my project list with comment "Shared context"');
+    assert.equal(r.intent, 'add_item');
+    assert.deepEqual(r.entities.comments, ['Shared context']);
+  });
+
+  it('extracts project item metadata', () => {
+    const r = parseIntent('Add "Design milestone" to my project list starts 2026-09-01 due 2026-09-05 for 3 hours assigned to larry@example.com');
+    assert.equal(r.intent, 'add_item');
+    assert.deepEqual(r.entities.project, {
+      startDate: '2026-09-01',
+      endDate: '2026-09-05',
+      durationMinutes: 180,
+      assignedTo: 'larry@example.com',
+    });
+  });
+});
+
+describe('parseIntent — create_list types', () => {
+  it('creates project lists', () => {
+    const r = parseIntent('Create a new project list called Website Launch');
+    assert.equal(r.intent, 'create_list');
+    assert.equal(r.entities.listName, 'Website Launch');
+    assert.equal(r.entities.listType, 'project');
+  });
+
+  it('creates notebook lists', () => {
+    const r = parseIntent('Create a new notebook list called Journal');
+    assert.equal(r.intent, 'create_list');
+    assert.equal(r.entities.listName, 'Journal');
+    assert.equal(r.entities.listType, 'notebook');
+  });
+
+  it('strips trailing type from generic create list command', () => {
+    const r = parseIntent('Create a new list called Client Projects project');
+    assert.equal(r.intent, 'create_list');
+    assert.equal(r.entities.listName, 'Client Projects');
+    assert.equal(r.entities.listType, 'project');
   });
 });
 

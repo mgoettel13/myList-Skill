@@ -20,6 +20,7 @@ Use this skill whenever the user wants to manage tasks, to-do items, or lists us
 - **"comment on item"** — add, view, update, or delete comments on shared items
 - **"comment on note"** — add, view, update, or delete comments on item notes
 - **"reminder"** — add or update simple item reminders
+- **"project list"** — create project lists and project items with start/end/duration/assignee metadata
 - **"export list"** — export a list as JSON or HTML
 - **"email list"** — email a list to someone
 - **"export priority"** — export all priority items
@@ -62,8 +63,13 @@ Add a new task to a specific list. Use quotes for the task text. Mark items as p
 | `put "text" on my [list] list` | `put "walk the dog" on my errands list` |
 | `add "text" to my [list] list` (priority) | `add "fix server outage" to my today list urgent` |
 | `add "text" to my [list] list reminder tomorrow at 9am` | `add "call Mama" to my today list reminder tomorrow at 9am` |
+| `add "text" to my [list] list with note "details"` | `add "ship dashboard" to my work list with note "needs QA"` |
+| `add "text" to my [list] list with comment "details"` | `add "review plan" to my project list with comment "shared context"` |
+| `add "text" to my [project] list starts YYYY-MM-DD due YYYY-MM-DD for N hours assigned to [user]` | `add "design milestone" to my launch list starts 2026-09-01 due 2026-09-05 for 3 hours assigned to larry@example.com` |
 
 **Keywords:** `add`, `create`, `new`, `put`
+
+**Create payload support:** item creation can include inline `notes`, inline `comments`, `reminder`, and project metadata (`startDate`, `endDate`, `durationMinutes`, `assignedTo`) when those phrases are present.
 
 ### 2. Get / List Items
 View all items in a specific list, or show all lists if no list name is given.
@@ -220,8 +226,12 @@ Create a new list.
 | `create a new list called [name]` | `create a new list called Projects` |
 | `make a new list named [name]` | `make a new list named Work` |
 | `create a new list called [name] notebook` | `create a new list called Journal notebook` |
+| `create a new project list called [name]` | `create a new project list called Website Launch` |
+| `create a new list called [name] project` | `create a new list called Client Projects project` |
 
 **Keywords:** `create`, `make`, `add`
+
+**List types:** `standard`, `notebook`, and `project` are supported. `journal` maps to `notebook`.
 
 ### 14. Delete List
 Delete an existing list (all items are permanently removed).
@@ -398,7 +408,7 @@ The skill uses the **Public API (`/v1/`)** endpoints on `https://api.mylister.de
 | Method | Endpoint | Purpose |
 |--------|----------|----------|
 | \`GET\` | \`/v1/lists\` | Fetch all lists (supports \`?includeArchived=true\`) |
-| \`POST\` | \`/v1/lists\` | Create a new list |
+| \`POST\` | \`/v1/lists\` | Create a new list (`standard`, `notebook`, or `project`) |
 | \`GET\` | \`/v1/lists/{id}\` | Get list details |
 | \`PUT\` | \`/v1/lists/{id}\` | Update a list (name, description, etc.) |
 | \`DELETE\` | \`/v1/lists/{id}\` | Delete a list |
@@ -407,7 +417,7 @@ The skill uses the **Public API (`/v1/`)** endpoints on `https://api.mylister.de
 | \`GET\` | \`/v1/lists/summary\` | Get lists summary with counts |
 | \`POST\` | \`/v1/lists/defaults\` | Create default starter lists |
 | \`GET\` | \`/v1/lists/{id}/items\` | Get items in a list |
-| \`POST\` | \`/v1/lists/{id}/items\` | Add an item to a list |
+| \`POST\` | \`/v1/lists/{id}/items\` | Add an item to a list, including optional notes, comments, reminder, project metadata, and attachments |
 | \`PUT\` | \`/v1/lists/{id}/items/reorder\` | Reorder items in a list |
 | \`POST\` | \`/v1/lists/{id}/items/move-completed\` | Move completed items to the bottom of the same list |
 | \`POST\` | \`/v1/lists/{id}/share\` | Share a list with a user |
@@ -496,3 +506,6 @@ lister-skill/
 14. **Comments are first-class resources** on both items and notes. Use the comment endpoints instead of treating item comments as notes.
 15. **Move completed** reorders completed items to the bottom of the same list; it no longer moves them to another list.
 16. **Notebook lists** are created by passing `type: "notebook"` when the user asks for a notebook or journal list.
+17. **Project lists** are created by passing `type: "project"` when the user asks for a project list.
+18. **Item creation with notes/comments** uses the `notes` and `comments` arrays in the initial `/v1/lists/{id}/items` request when the user says `with note "..."` or `with comment "..."`.
+19. **Project item metadata** is sent in the `project` object with supported fields `startDate`, `endDate`, `durationMinutes`, and `assignedTo`. The API validates `assignedTo`; use the owner or an edit/admin collaborator.

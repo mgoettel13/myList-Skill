@@ -40,6 +40,8 @@ console.log(response);
 | Command | Example |
 |---------|---------|
 | Add item | `add "task" to my [list] list` |
+| Add item with note | `add "task" to my [list] list with note "details"` |
+| Add project item | `add "task" to my project list starts 2026-09-01 due 2026-09-05 for 3 hours assigned to user@example.com` |
 | Get items | `get my [list] list` |
 | Priority items | `get priority items` |
 | Mark done | `mark item [id] done` |
@@ -51,6 +53,7 @@ console.log(response);
 | Note comments | `comment on note [note_id] for item [id]: "text"` |
 | Reminders | `add "task" to my today list reminder tomorrow at 9am` |
 | Notebook lists | `create a new list called Journal notebook` |
+| Project lists | `create a new project list called Website Launch` |
 | Move completed | `move completed to bottom of my today list` |
 
 ## API

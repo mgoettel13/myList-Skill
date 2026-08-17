@@ -60,8 +60,16 @@ interface ParsedIntent {
     includeNotes?: boolean;
     listIds?: string[];
     itemIds?: string[];
-    listType?: 'standard' | 'notebook';
+    listType?: 'standard' | 'notebook' | 'project';
     reminder?: any;
+    notes?: string[];
+    comments?: string[];
+    project?: {
+      startDate?: string;
+      endDate?: string;
+      durationMinutes?: number;
+      assignedTo?: string;
+    };
   };
 }
 
@@ -141,6 +149,36 @@ function parseSimpleReminder(input: string): any | undefined {
   return remindAt ? { remindAt: remindAt.toISOString() } : undefined;
 }
 
+function extractTrailingQuotedValues(input: string, labels: string[]): string[] | undefined {
+  const values: string[] = [];
+  const labelPattern = labels.map(escapeRegExp).join('|');
+  const pattern = new RegExp(`\\b(?:with\\s+)?(?:${labelPattern})\\s*:?\\s*"([^"]+)"`, 'gi');
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(input))) {
+    values.push(match[1]);
+  }
+  return values.length ? values : undefined;
+}
+
+function parseProjectData(input: string): ParsedIntent['entities']['project'] {
+  const project: NonNullable<ParsedIntent['entities']['project']> = {};
+  const startDate = input.match(/\bstart(?:s|ing)?\s+(?:on\s+)?(\d{4}-\d{2}-\d{2})/i)?.[1];
+  const endDate = input.match(/\bend(?:s|ing)?\s+(?:on\s+)?(\d{4}-\d{2}-\d{2})/i)?.[1] ??
+    input.match(/\bdue\s+(?:on\s+)?(\d{4}-\d{2}-\d{2})/i)?.[1];
+  const duration = input.match(/\b(?:duration|for)\s+(\d+)\s*(minutes?|mins?|hours?|hrs?)\b/i);
+  const assignedTo = input.match(/\bassign(?:ed)?\s+to\s+([\w.+-]+@[\w.-]+\.[a-z]{2,}|\S+)/i)?.[1];
+
+  if (startDate) project.startDate = startDate;
+  if (endDate) project.endDate = endDate;
+  if (duration) {
+    const amount = Number(duration[1]);
+    project.durationMinutes = /hours?|hrs?/i.test(duration[2]) ? amount * 60 : amount;
+  }
+  if (assignedTo) project.assignedTo = assignedTo;
+
+  return Object.keys(project).length ? project : undefined;
+}
+
 // ─── Intent Parser ───────────────────────────────────────────────────────────
 function parseIntent(input: string): ParsedIntent {
   const lower = input.toLowerCase();
@@ -155,8 +193,10 @@ function parseIntent(input: string): ParsedIntent {
     extractListName(input, ['add', 'create', 'put', 'get', 'show', 'view', 'list', 'find', 'search', 'export', 'email', 'archive', 'unarchive', 'update', 'edit', 'rename', 'change']);
 
   // Extract new list name for "create a new list called X" / "create list X"
-  const createListMatch = lower.match(/(?:create|make|add)\s*(?:a\s+new\s+)?list\s*(?:called|named|\s)([^\n,]+)/i);
-  const newListName = createListMatch ? createListMatch[1].trim() : undefined;
+  const createTypedListMatch = input.match(/(?:create|make|add)\s*(?:a\s+new\s+)?(standard|notebook|journal|project)\s+list\s*(?:called|named|\s)([^\n,]+)/i);
+  const createListMatch = input.match(/(?:create|make|add)\s*(?:a\s+new\s+)?list\s*(?:called|named|\s)([^\n,]+)/i);
+  const newListName = createTypedListMatch ? createTypedListMatch[2].trim() : (createListMatch ? createListMatch[1].trim() : undefined);
+  const explicitCreateListType = createTypedListMatch?.[1]?.toLowerCase() === 'journal' ? 'notebook' : createTypedListMatch?.[1]?.toLowerCase();
 
   // Extract list name for delete: "delete my X list" or "delete list X"
   // Handles: "delete my work list" → work
@@ -193,7 +233,11 @@ function parseIntent(input: string): ParsedIntent {
   // Priority flag
   const priority = /priority|urgent|important/i.test(lower);
   const reminder = parseSimpleReminder(input);
-  const listType = /\bnotebook|journal\b/i.test(lower) ? 'notebook' : undefined;
+  const listType = (explicitCreateListType as 'standard' | 'notebook' | 'project' | undefined) ??
+    (/\bproject\b/i.test(lower) ? 'project' : (/\bnotebook|journal\b/i.test(lower) ? 'notebook' : undefined));
+  const notes = extractTrailingQuotedValues(input, ['note', 'notes']);
+  const comments = extractTrailingQuotedValues(input, ['comment', 'comments']);
+  const project = parseProjectData(input);
 
   const updateItemCommentMatch = input.match(/^(?:update|edit|change)\s+comment\s+([a-f0-9]{24}|\d+)\s+(?:on|for)\s+item\s+([a-f0-9]{24}|\d+)/i);
   if (updateItemCommentMatch) {
@@ -260,8 +304,9 @@ function parseIntent(input: string): ParsedIntent {
   }
 
   // Create list (before add_item - "create a new list called X")
-  if (/^create\s*(a\s+new)?\s*list/i.test(lower)) {
-    return { intent: 'create_list', entities: { listName: newListName, listType } };
+  if (/^create\s*(a\s+new)?\s*(?:standard|notebook|journal|project)?\s*list/i.test(lower)) {
+    const listNameWithoutType = createTypedListMatch ? newListName : newListName?.replace(/\s+(?:standard|notebook|journal|project)\s*$/i, '').trim();
+    return { intent: 'create_list', entities: { listName: listNameWithoutType, listType } };
   }
 
   // Delete list: "delete my X list" (captures X) or "delete list X" (captures X)
@@ -370,7 +415,7 @@ function parseIntent(input: string): ParsedIntent {
 
   // Add item
   if (/^(add|create|new|put)\b/.test(lower)) {
-    return { intent: 'add_item', entities: { itemText, listName, priority, reminder } };
+    return { intent: 'add_item', entities: { itemText, listName, priority, reminder, notes, comments, project } };
   }
 
   // Get items / list (generic fallback for show/view/find/list/get + list name)
@@ -486,7 +531,7 @@ class ListerClient {
     }
   }
 
-  async createList(name: string, type?: 'standard' | 'notebook'): Promise<ListerResponse> {
+  async createList(name: string, type?: 'standard' | 'notebook' | 'project'): Promise<ListerResponse> {
     try {
       const res = await fetch(`${this.baseUrl}/v1/lists`, {
         method: 'POST',
@@ -513,14 +558,27 @@ class ListerClient {
     }
   }
 
-  async addItem(listId: string, content: string, isPriority: boolean, reminder?: any): Promise<ListerResponse> {
+  async addItem(
+    listId: string,
+    content: string,
+    isPriority: boolean,
+    options?: {
+      reminder?: any;
+      notes?: string[];
+      comments?: string[];
+      project?: ParsedIntent['entities']['project'];
+    },
+  ): Promise<ListerResponse> {
     try {
       const body = {
         content,
         type: 'text',
         status: 'new',
         isPriority,
-        ...(reminder ? { reminder } : {}),
+        ...(options?.reminder ? { reminder: options.reminder } : {}),
+        ...(options?.notes?.length ? { notes: options.notes.map(note => ({ content: note })) } : {}),
+        ...(options?.comments?.length ? { comments: options.comments.map(comment => ({ content: comment })) } : {}),
+        ...(options?.project ? { project: options.project } : {}),
       };
       const res = await fetch(`${this.baseUrl}/v1/lists/${listId}/items`, {
         method: 'POST',
@@ -1138,7 +1196,12 @@ export async function handleCommand(input: string): Promise<string> {
         result.list.id,
         parsed.entities.itemText,
         parsed.entities.priority ?? false,
-        parsed.entities.reminder,
+        {
+          reminder: parsed.entities.reminder,
+          notes: parsed.entities.notes,
+          comments: parsed.entities.comments,
+          project: parsed.entities.project,
+        },
       );
       return formatResponse(addResult);
     }
