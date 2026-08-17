@@ -18,7 +18,7 @@ import fetch from 'node-fetch';
 
 // ─── Configuration ───────────────────────────────────────────────────────────
 const CONFIG = {
-  baseUrl: process.env.LISTER_BASE_URL || 'https://api.mylister.dev',
+  baseUrl: process.env.LISTER_BASE_URL || 'https://api.mylister.com',
   apiKey: process.env.LISTER_API_KEY || '',
   defaultListName: 'Quick Takes',
 };
@@ -89,6 +89,10 @@ function normalizeListName(value?: string): string | undefined {
     .replace(/\s+/g, ' ')
     .trim();
   return normalized || undefined;
+}
+
+function normalizeBaseUrl(value: string): string {
+  return value.replace(/\/+$/, '');
 }
 
 function extractListName(input: string, verbs: string[] = []): string | undefined {
@@ -409,20 +413,43 @@ function parseIntent(input: string): ParsedIntent {
 class ListerClient {
   private baseUrl: string;
   private apiKey: string;
+  private expectedHost: string;
 
   constructor() {
-    this.baseUrl = CONFIG.baseUrl;
+    this.baseUrl = normalizeBaseUrl(CONFIG.baseUrl);
     this.apiKey = CONFIG.apiKey;
+    this.expectedHost = new URL(this.baseUrl).host;
   }
 
   private getAuthHeader(): Record<string, string> {
     return {
       'X-API-Key': this.apiKey,
+      'Authorization': `Bearer ${this.apiKey}`,
+      'Accept': 'application/json',
       'Content-Type': 'application/json',
     };
   }
 
   private async parseResponse(res: any): Promise<ParsedApiResponse> {
+    const finalHost = res.url ? new URL(res.url).host : this.expectedHost;
+    const contentType = res.headers?.get?.('content-type') ?? '';
+    if (finalHost !== this.expectedHost) {
+      return {
+        ok: false,
+        status: res.status,
+        data: null,
+        error: `API request was redirected from ${this.expectedHost} to ${finalHost}. Check LISTER_BASE_URL and API DNS routing.`,
+      };
+    }
+    if (contentType && !contentType.includes('application/json')) {
+      const text = await res.text().catch(() => '');
+      return {
+        ok: false,
+        status: res.status,
+        data: null,
+        error: `Expected JSON from API but received ${contentType || 'non-JSON'} (${res.status}). ${text.slice(0, 160).trim()}`,
+      };
+    }
     const raw = await res.json().catch(() => null) as any;
     // API wraps data in { success, data } or returns array
     const data = Array.isArray(raw) ? raw : (raw?.data ?? raw);
@@ -453,8 +480,8 @@ class ListerClient {
         method: 'DELETE',
         headers: this.getAuthHeader(),
       });
-      const data = await res.json() as any;
-      return { success: res.ok, message: res.ok ? 'List deleted' : `Failed: ${data?.detail ?? res.statusText}`, data };
+      const { ok, data, error } = await this.parseResponse(res);
+      return { success: ok, message: ok ? 'List deleted' : `Failed: ${error}`, data };
     } catch (err) {
       return { success: false, message: `Error deleting list: ${err}` };
     }
@@ -467,8 +494,8 @@ class ListerClient {
         headers: this.getAuthHeader(),
         body: JSON.stringify({ name, ...(type ? { type } : {}) }),
       });
-      const data = await res.json() as any;
-      return { success: res.ok, message: res.ok ? `List '${name}' created` : `Failed: ${data?.detail ?? res.statusText}`, data };
+      const { ok, data, error } = await this.parseResponse(res);
+      return { success: ok, message: ok ? `List '${name}' created` : `Failed: ${error}`, data };
     } catch (err) {
       return { success: false, message: `Error creating list: ${err}` };
     }
@@ -501,8 +528,8 @@ class ListerClient {
         headers: this.getAuthHeader(),
         body: JSON.stringify(body),
       });
-      const data = await res.json() as any;
-      return { success: res.ok, message: res.ok ? `'${content}' added to list` : `Failed: ${JSON.stringify(data?.detail ?? res.statusText)}`, data };
+      const { ok, data, error } = await this.parseResponse(res);
+      return { success: ok, message: ok ? `'${content}' added to list` : `Failed: ${error}`, data };
     } catch (err) {
       return { success: false, message: `Error adding item: ${err}` };
     }
@@ -515,8 +542,8 @@ class ListerClient {
         headers: this.getAuthHeader(),
         body: JSON.stringify(updates),
       });
-      const data = await res.json() as any;
-      return { success: res.ok, message: res.ok ? 'Item updated' : `Failed: ${JSON.stringify(data?.detail ?? res.statusText)}`, data };
+      const { ok, data, error } = await this.parseResponse(res);
+      return { success: ok, message: ok ? 'Item updated' : `Failed: ${error}`, data };
     } catch (err) {
       return { success: false, message: `Error updating item: ${err}` };
     }
@@ -540,7 +567,8 @@ class ListerClient {
         method: 'DELETE',
         headers: this.getAuthHeader(),
       });
-      return { success: res.ok, message: res.ok ? 'Item deleted' : 'Failed to delete item' };
+      const { ok, error } = await this.parseResponse(res);
+      return { success: ok, message: ok ? 'Item deleted' : `Failed: ${error}` };
     } catch (err) {
       return { success: false, message: `Error deleting item: ${err}` };
     }
@@ -553,8 +581,8 @@ class ListerClient {
         headers: this.getAuthHeader(),
         body: JSON.stringify({ targetListId }),
       });
-      const data = await res.json() as any;
-      return { success: res.ok, message: res.ok ? 'Item moved' : `Failed: ${JSON.stringify(data?.detail ?? res.statusText)}`, data };
+      const { ok, data, error } = await this.parseResponse(res);
+      return { success: ok, message: ok ? 'Item moved' : `Failed: ${error}`, data };
     } catch (err) {
       return { success: false, message: `Error moving item: ${err}` };
     }
@@ -567,8 +595,8 @@ class ListerClient {
         headers: this.getAuthHeader(),
         body: JSON.stringify({ content }),
       });
-      const data = await res.json() as any;
-      return { success: res.ok, message: res.ok ? 'Note added' : `Failed: ${JSON.stringify(data?.detail ?? res.statusText)}`, data };
+      const { ok, data, error } = await this.parseResponse(res);
+      return { success: ok, message: ok ? 'Note added' : `Failed: ${error}`, data };
     } catch (err) {
       return { success: false, message: `Error adding note: ${err}` };
     }
@@ -740,11 +768,11 @@ class ListerClient {
           const html = await res.text();
           return { success: true, message: `List exported as HTML (${html.length} bytes)`, data: { format: 'html', size: html.length } };
         }
-        const data = await res.json();
+        const { data } = await this.parseResponse(res);
         return { success: true, message: `List exported as JSON`, data };
       }
-      const data = await res.json() as any;
-      return { success: false, message: `Failed: ${JSON.stringify(data?.detail ?? res.statusText)}`, data };
+      const { data, error } = await this.parseResponse(res);
+      return { success: false, message: `Failed: ${error}`, data };
     } catch (err) {
       return { success: false, message: `Error exporting list: ${err}` };
     }
@@ -768,11 +796,11 @@ class ListerClient {
           const html = await res.text();
           return { success: true, message: `Priority items exported as HTML (${html.length} bytes)`, data: { format: 'html', size: html.length } };
         }
-        const data = await res.json();
+        const { data } = await this.parseResponse(res);
         return { success: true, message: `Priority items exported as JSON`, data };
       }
-      const data = await res.json() as any;
-      return { success: false, message: `Failed: ${JSON.stringify(data?.detail ?? res.statusText)}`, data };
+      const { data, error } = await this.parseResponse(res);
+      return { success: false, message: `Failed: ${error}`, data };
     } catch (err) {
       return { success: false, message: `Error exporting priority items: ${err}` };
     }
@@ -789,8 +817,8 @@ class ListerClient {
           includeArchived: options.includeArchived,
         }),
       });
-      const data = await res.json() as any;
-      return { success: res.ok, message: res.ok ? 'List emailed successfully' : `Failed: ${JSON.stringify(data?.detail ?? res.statusText)}`, data };
+      const { ok, data, error } = await this.parseResponse(res);
+      return { success: ok, message: ok ? 'List emailed successfully' : `Failed: ${error}`, data };
     } catch (err) {
       return { success: false, message: `Error emailing list: ${err}` };
     }
@@ -807,8 +835,8 @@ class ListerClient {
           includeArchived: options.includeArchived,
         }),
       });
-      const data = await res.json() as any;
-      return { success: res.ok, message: res.ok ? 'Priority items emailed successfully' : `Failed: ${JSON.stringify(data?.detail ?? res.statusText)}`, data };
+      const { ok, data, error } = await this.parseResponse(res);
+      return { success: ok, message: ok ? 'Priority items emailed successfully' : `Failed: ${error}`, data };
     } catch (err) {
       return { success: false, message: `Error emailing priority items: ${err}` };
     }
@@ -823,11 +851,11 @@ class ListerClient {
       const res = await fetch(`${this.baseUrl}/v1/search?${params}`, {
         headers: this.getAuthHeader(),
       });
-      const json = await res.json() as any;
-      const data = json.data ?? json.results ?? json;
+      const { ok, data: json, error } = await this.parseResponse(res);
+      const data = json?.data ?? json?.results ?? json;
       const items = Array.isArray(data) ? data : (data?.items ?? []);
-      const totalResults = json.totalResults ?? items.length;
-      return { success: res.ok, message: `Found ${totalResults} results`, data: items };
+      const totalResults = json?.totalResults ?? items.length;
+      return { success: ok, message: ok ? `Found ${totalResults} results` : `Failed: ${error}`, data: items };
     } catch (err) {
       return { success: false, message: `Error searching: ${err}` };
     }
@@ -853,8 +881,8 @@ class ListerClient {
         headers: this.getAuthHeader(),
         body: JSON.stringify({ archived }),
       });
-      const data = await res.json() as any;
-      return { success: res.ok, message: res.ok ? (archived ? 'List archived' : 'List unarchived') : `Failed: ${JSON.stringify(data?.detail ?? res.statusText)}`, data };
+      const { ok, data, error } = await this.parseResponse(res);
+      return { success: ok, message: ok ? (archived ? 'List archived' : 'List unarchived') : `Failed: ${error}`, data };
     } catch (err) {
       return { success: false, message: `Error archiving list: ${err}` };
     }
@@ -867,8 +895,8 @@ class ListerClient {
         headers: this.getAuthHeader(),
         body: JSON.stringify({ userId, permission }),
       });
-      const data = await res.json() as any;
-      return { success: res.ok, message: res.ok ? `List shared with ${userId} (${permission})` : `Failed: ${JSON.stringify(data?.detail ?? res.statusText)}`, data };
+      const { ok, data, error } = await this.parseResponse(res);
+      return { success: ok, message: ok ? `List shared with ${userId} (${permission})` : `Failed: ${error}`, data };
     } catch (err) {
       return { success: false, message: `Error sharing list: ${err}` };
     }
@@ -893,8 +921,8 @@ class ListerClient {
         method: 'DELETE',
         headers: this.getAuthHeader(),
       });
-      const data = await res.json() as any;
-      return { success: res.ok, message: res.ok ? `User ${userId} removed from list` : `Failed: ${JSON.stringify(data?.detail ?? res.statusText)}`, data };
+      const { ok, data, error } = await this.parseResponse(res);
+      return { success: ok, message: ok ? `User ${userId} removed from list` : `Failed: ${error}`, data };
     } catch (err) {
       return { success: false, message: `Error removing user from list: ${err}` };
     }
@@ -907,8 +935,8 @@ class ListerClient {
         headers: this.getAuthHeader(),
         body: JSON.stringify({ permission }),
       });
-      const data = await res.json() as any;
-      return { success: res.ok, message: res.ok ? `User ${userId} permission updated to ${permission}` : `Failed: ${JSON.stringify(data?.detail ?? res.statusText)}`, data };
+      const { ok, data, error } = await this.parseResponse(res);
+      return { success: ok, message: ok ? `User ${userId} permission updated to ${permission}` : `Failed: ${error}`, data };
     } catch (err) {
       return { success: false, message: `Error updating user permission: ${err}` };
     }
@@ -921,8 +949,8 @@ class ListerClient {
         headers: this.getAuthHeader(),
         body: JSON.stringify({ order: listIds }),
       });
-      const data = await res.json() as any;
-      return { success: res.ok, message: res.ok ? 'Lists reordered' : `Failed: ${JSON.stringify(data?.detail ?? res.statusText)}`, data };
+      const { ok, data, error } = await this.parseResponse(res);
+      return { success: ok, message: ok ? 'Lists reordered' : `Failed: ${error}`, data };
     } catch (err) {
       return { success: false, message: `Error reordering lists: ${err}` };
     }
@@ -935,8 +963,8 @@ class ListerClient {
         headers: this.getAuthHeader(),
         body: JSON.stringify({ order: itemIds }),
       });
-      const data = await res.json() as any;
-      return { success: res.ok, message: res.ok ? 'Items reordered' : `Failed: ${JSON.stringify(data?.detail ?? res.statusText)}`, data };
+      const { ok, data, error } = await this.parseResponse(res);
+      return { success: ok, message: ok ? 'Items reordered' : `Failed: ${error}`, data };
     } catch (err) {
       return { success: false, message: `Error reordering items: ${err}` };
     }
@@ -948,8 +976,8 @@ class ListerClient {
         method: 'POST',
         headers: this.getAuthHeader(),
       });
-      const data = await res.json() as any;
-      return { success: res.ok, message: res.ok ? 'Completed items moved to bottom' : `Failed: ${JSON.stringify(data?.detail ?? res.statusText)}`, data };
+      const { ok, data, error } = await this.parseResponse(res);
+      return { success: ok, message: ok ? 'Completed items moved to bottom' : `Failed: ${error}`, data };
     } catch (err) {
       return { success: false, message: `Error moving completed items: ${err}` };
     }
@@ -960,8 +988,8 @@ class ListerClient {
       const res = await fetch(`${this.baseUrl}/v1/lists/${listId}`, {
         headers: this.getAuthHeader(),
       });
-      const data = await res.json() as any;
-      return { success: res.ok, message: res.ok ? 'List details' : `Failed: ${JSON.stringify(data?.detail ?? res.statusText)}`, data: data?.data ?? data };
+      const { ok, data, error } = await this.parseResponse(res);
+      return { success: ok, message: ok ? 'List details' : `Failed: ${error}`, data: data?.data ?? data };
     } catch (err) {
       return { success: false, message: `Error fetching list: ${err}` };
     }
@@ -974,8 +1002,8 @@ class ListerClient {
         headers: this.getAuthHeader(),
         body: JSON.stringify(updates),
       });
-      const data = await res.json() as any;
-      return { success: res.ok, message: res.ok ? 'List updated' : `Failed: ${JSON.stringify(data?.detail ?? res.statusText)}`, data: data?.data ?? data };
+      const { ok, data, error } = await this.parseResponse(res);
+      return { success: ok, message: ok ? 'List updated' : `Failed: ${error}`, data: data?.data ?? data };
     } catch (err) {
       return { success: false, message: `Error updating list: ${err}` };
     }
@@ -988,8 +1016,8 @@ class ListerClient {
         headers: this.getAuthHeader(),
         body: JSON.stringify({ content }),
       });
-      const data = await res.json() as any;
-      return { success: res.ok, message: res.ok ? 'Note updated' : `Failed: ${JSON.stringify(data?.detail ?? res.statusText)}`, data };
+      const { ok, data, error } = await this.parseResponse(res);
+      return { success: ok, message: ok ? 'Note updated' : `Failed: ${error}`, data };
     } catch (err) {
       return { success: false, message: `Error updating note: ${err}` };
     }
@@ -1001,7 +1029,8 @@ class ListerClient {
         method: 'DELETE',
         headers: this.getAuthHeader(),
       });
-      return { success: res.ok, message: res.ok ? 'Note deleted' : 'Failed to delete note' };
+      const { ok, error } = await this.parseResponse(res);
+      return { success: ok, message: ok ? 'Note deleted' : `Failed: ${error}` };
     } catch (err) {
       return { success: false, message: `Error deleting note: ${err}` };
     }
@@ -1014,8 +1043,8 @@ class ListerClient {
         headers: this.getAuthHeader(),
         body: JSON.stringify({ status }),
       });
-      const data = await res.json() as any;
-      return { success: res.ok, message: res.ok ? `Note marked as ${status}` : `Failed: ${JSON.stringify(data?.detail ?? res.statusText)}`, data };
+      const { ok, data, error } = await this.parseResponse(res);
+      return { success: ok, message: ok ? `Note marked as ${status}` : `Failed: ${error}`, data };
     } catch (err) {
       return { success: false, message: `Error updating note status: ${err}` };
     }
